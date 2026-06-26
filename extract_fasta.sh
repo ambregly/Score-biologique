@@ -30,8 +30,16 @@ extract_one() {
         # 25 nt en aval du "|"
         right = substr(right_part, 1, 25)
         if (length(left) == 26 && length(right) == 25) {
-            print ">"header
-            print left right
+            seq = left right
+            # Supprimer les doublons exacts (meme en-tete ET meme sequence)
+            key = header SUBSEP seq
+            if (key in seen_pair) next
+            seen_pair[key] = 1
+            # Rendre l en-tete unique en cas de collision (kmerator l exige)
+            cnt[header]++
+            h = (cnt[header] > 1) ? header "_" cnt[header] : header
+            print ">"h
+            print seq
         }
     }' "$input" > "$output"
     echo "✓ $input → $output"
