@@ -3,12 +3,37 @@
 # Analyse fusions — projet Chromoanagenesis-AML (JB_GAILLARD)
 # -----------------------------------------------------------------------------
 #   1. comptages mergés chromo + WT  -> spécificité tumorale (chromo vs WT)
-#   2. matching Arriba (clé = paire de breakpoints) -> caractéristiques
-#   3. score biologique adapté (A,B,C,[E],G,H)  -> priorités P1/P2/P3
+#   2. matching Arriba (clé = paire de gènes) -> caractéristiques
+#   3. score biologique pondéré & paramétrable -> priorités P1/P2/P3
 #   4. figures : barplot, volcano, heatmap, décomposition du score, karyotype
 #
 # Inspiré du pipeline LAM — sans survie ni Cox.
-# Lancement :  Rscript analyse_fusions_chromoAML.R
+#
+# Usage :
+#   Rscript analyse_fusions_chromoAML.R [options]
+#
+# Options de filtrage (comptage max par individu) :
+#   --wt-min N         WT positif si comptage  > N        (défaut 0)
+#   --chromo-min N     chromo positif si comptage >= N    (défaut 5)
+#   --max-wt-pos N     Règle 2 : WT positifs max          (défaut 2)
+#   --min-chromo-pos N Règle 2 : chromo positifs min      (défaut 5)
+#   --max-freq-wt F    Règle 2 : fréquence WT max         (défaut 0.05)
+#
+# Poids des composantes du score (0 = composante retirée) :
+#   --type N      type chimérique     (défaut 4)
+#   --conf N      confidence Arriba   (défaut 2)
+#   --spec N      spécificité WT      (défaut 2)
+#   --who N       fusion WHO          (défaut 2)
+#   --frame N     reading frame       (défaut 2)
+#   --reads N     reads Arriba        (défaut 2)
+#   --coverage N  comptage k-mer      (défaut 0)
+#
+# Autres :
+#   --n-top N     nb de fusions dans les figures (défaut 30)
+#   --dir-merge / --dir-arriba / --dir-out   chemins
+#   --help        affiche cette aide
+#
+# Exemple : Rscript analyse_fusions_chromoAML.R --coverage 3 --who 3 --chromo-min 10
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -16,22 +41,74 @@ suppressPackageStartupMessages({
   library(scales)
 })
 
-# ── PARAMÈTRES ───────────────────────────────────────────────────────────────
-DIR_MERGE  <- "/scratch/ambre/JB_chromo_wt_merge1"
-DIR_ARRIBA <- "/data/nas/projects/2025/JB_GAILLARD/analysis/trimmed/starriba"
-DIR_OUT    <- "/scratch/ambre/analyse_fusions"
-DIR_FIG    <- file.path(DIR_OUT, "figures")
-
-COUNT_MIN        <- 0        # échantillon "positif" si comptage > COUNT_MIN
-MAX_WT_POS       <- 2        # Règle 2 : WT positifs maximum
-MIN_CHROMO_POS   <- 5        # Règle 2 : chromo positifs minimum
-MAX_FREQ_WT      <- 0.05     # Règle 2 : fréquence WT maximum
+# ── CONFIG PAR DÉFAUT ────────────────────────────────────────────────────────
+opt <- list(
+  dir_merge  = "/scratch/ambre/JB_chromo_wt_merge1",
+  dir_arriba = "/data/nas/projects/2025/JB_GAILLARD/analysis/trimmed/starriba",
+  dir_out    = "/scratch/ambre/analyse_fusions",
+  # filtres
+  wt_min = 0, chromo_min = 5,
+  max_wt_pos = 2, min_chromo_pos = 5, max_freq_wt = 0.05,
+  # figures
+  n_top = 30,
+  # poids des composantes du score
+  w_type = 4, w_conf = 2, w_spec = 2, w_who = 2, w_frame = 2, w_reads = 2,
+  w_coverage = 0
+)
 READTHROUGH_DIST <- 300000   # seuil read-through (Rufflé 2024) en pb
-N_TOP            <- 30        # nb de fusions affichées dans les figures
 
-# Composante E : fusions WHO d'intérêt clinique (reprise du pipeline LAM).
-# Test au niveau fusion (gene1--gene2), dans les deux orientations, après
-# résolution des alias HGNC ci-dessous.
+# ── PARSER CLI ───────────────────────────────────────────────────────────────
+alias <- c(type = "w_type", conf = "w_conf", confidence = "w_conf",
+           spec = "w_spec", specificity = "w_spec", who = "w_who",
+           frame = "w_frame", reads = "w_reads", coverage = "w_coverage",
+           cov = "w_coverage")
+string_opts <- c("dir_merge", "dir_arriba", "dir_out")
+
+args <- commandArgs(trailingOnly = TRUE)
+if ("--help" %in% args || "-h" %in% args) {
+  cat("Voir l'entête du script pour la liste des options.\n")
+  cat("Options : --wt-min --chromo-min --max-wt-pos --min-chromo-pos",
+      "--max-freq-wt --type --conf --spec --who --frame --reads --coverage",
+      "--n-top --dir-merge --dir-arriba --dir-out\n")
+  quit(status = 0)
+}
+
+i <- 1
+while (i <= length(args)) {
+  a <- args[i]
+  if (grepl("^--", a)) {
+    a2 <- sub("^--", "", a)
+    if (grepl("=", a2)) {
+      kv <- strsplit(a2, "=", fixed = TRUE)[[1]]; key <- kv[1]; val <- kv[2]
+    } else {
+      key <- a2
+      if (i < length(args) && !grepl("^--", args[i + 1])) {
+        val <- args[i + 1]; i <- i + 1
+      } else val <- "TRUE"
+    }
+    key <- gsub("-", "_", key)
+    if (key %in% names(alias)) key <- alias[[key]]
+    if (key %in% names(opt)) {
+      opt[[key]] <- if (key %in% string_opts) val else suppressWarnings(as.numeric(val))
+    } else warning("Option inconnue ignorée : --", key)
+  }
+  i <- i + 1
+}
+
+DIR_OUT <- opt$dir_out
+DIR_FIG <- file.path(DIR_OUT, "figures")
+dir.create(DIR_OUT, showWarnings = FALSE, recursive = TRUE)
+dir.create(DIR_FIG, showWarnings = FALSE, recursive = TRUE)
+theme_set(theme_bw(base_size = 12))
+
+cat("=== CONFIGURATION ===\n")
+cat(sprintf("Filtres : WT > %s | chromo >= %s | Règle2 (WT<=%s, chromo>=%s, freqWT<=%s)\n",
+            opt$wt_min, opt$chromo_min, opt$max_wt_pos, opt$min_chromo_pos, opt$max_freq_wt))
+cat(sprintf("Poids   : type=%s conf=%s spec=%s who=%s frame=%s reads=%s coverage=%s\n\n",
+            opt$w_type, opt$w_conf, opt$w_spec, opt$w_who, opt$w_frame,
+            opt$w_reads, opt$w_coverage))
+
+# ── Fusions WHO d'intérêt (composante E) + alias HGNC ─────────────────────────
 WHO_FUSIONS_INTEREST <- c(
   "RUNX1--RUNX1T1", "CBFB--MYH11", "PML--RARA", "KMT2A--MLLT3",
   "DEK--NUP214", "NUP98--NSD1", "BCR--ABL1", "NRIP1--MIR99AHG"
@@ -43,10 +120,6 @@ GENE_ALIASES <- c(
 )
 resolve_alias <- function(g) ifelse(g %in% names(GENE_ALIASES), GENE_ALIASES[g], g)
 
-dir.create(DIR_OUT, showWarnings = FALSE, recursive = TRUE)
-dir.create(DIR_FIG, showWarnings = FALSE, recursive = TRUE)
-theme_set(theme_bw(base_size = 12))
-
 # ── Constantes visuelles ─────────────────────────────────────────────────────
 TYPE_COLORS <- c(
   Translocation = "#d62728", Inversion = "#9467bd", "Délétion" = "#ff7f0e",
@@ -57,7 +130,6 @@ TYPE_SHAPES <- c(
   Translocation = 16, Inversion = 17, Duplication = 15, "Délétion" = 18,
   "Read-through" = 25, "Non confirmé Arriba" = 4, Inconnu = 3
 )
-# Classe Rufflé d'après le type chimérique
 TYPE_CLASS <- c(
   Translocation = "Class 1", Inversion = "Class 4", Duplication = "Class 3",
   "Délétion" = "Class 2", "Read-through" = "Class 2",
@@ -65,15 +137,14 @@ TYPE_CLASS <- c(
 )
 
 # ── 1. CHARGEMENT DES COMPTAGES MERGÉS ───────────────────────────────────────
-merge_files <- list.files(DIR_MERGE, pattern = "chromo_wt_merge1.*\\.tsv$",
+merge_files <- list.files(opt$dir_merge, pattern = "chromo_wt_merge1.*\\.tsv$",
                           full.names = TRUE)
 if (length(merge_files) == 0)
-  stop("Aucun fichier *chromo_wt_merge1*.tsv dans : ", DIR_MERGE)
+  stop("Aucun fichier *chromo_wt_merge1*.tsv dans : ", opt$dir_merge)
 cat(length(merge_files), "fichier(s) de comptage trouvé(s)\n")
 
 raw_stacked <- map_dfr(merge_files, ~ read_tsv(.x, show_col_types = FALSE) %>%
                          mutate(source_file = basename(.x)))
-
 all_cols    <- setdiff(names(raw_stacked), c("seq_name", "source_file"))
 chromo_cols <- all_cols[str_starts(all_cols, "JB_")]
 wt_cols     <- setdiff(all_cols, chromo_cols)
@@ -85,65 +156,56 @@ raw_stacked <- raw_stacked %>%
 # ── 2. AGRÉGATION MAX PAR FUSION ─────────────────────────────────────────────
 agg <- raw_stacked %>%
   group_by(seq_name) %>%
-  summarise(
-    across(all_of(all_cols), ~ suppressWarnings(max(.x, na.rm = TRUE))),
-    n_fichiers = n_distinct(source_file),
-    .groups = "drop"
-  ) %>%
+  summarise(across(all_of(all_cols), ~ suppressWarnings(max(.x, na.rm = TRUE))),
+            n_fichiers = n_distinct(source_file), .groups = "drop") %>%
   mutate(across(all_of(all_cols), ~ ifelse(is.finite(.x), .x, 0)))
 cat(nrow(agg), "fusions uniques après agrégation MAX\n")
 
-# ── 3. SPÉCIFICITÉ TUMORALE (chromo vs WT) ───────────────────────────────────
+# ── 3. SPÉCIFICITÉ TUMORALE (filtres paramétrables) ──────────────────────────
 mat_chromo <- as.matrix(agg[, chromo_cols]); rownames(mat_chromo) <- agg$seq_name
 mat_wt     <- as.matrix(agg[, wt_cols])
-n_chromo   <- length(chromo_cols)
-n_wt       <- length(wt_cols)
+n_chromo   <- length(chromo_cols); n_wt <- length(wt_cols)
 
 spec <- agg %>%
   transmute(seq_name, n_fichiers) %>%
   mutate(
-    n_chromo_pos   = rowSums(mat_chromo > COUNT_MIN),
-    n_wt_pos       = rowSums(mat_wt     > COUNT_MIN),
+    n_chromo_pos   = rowSums(mat_chromo >= opt$chromo_min),  # chromo : >= seuil
+    n_wt_pos       = rowSums(mat_wt     >  opt$wt_min),      # WT     : > seuil
     freq_chromo    = n_chromo_pos / n_chromo,
     freq_wt        = n_wt_pos / n_wt,
     max_chromo     = apply(mat_chromo, 1, max),
     max_wt         = apply(mat_wt,     1, max),
-    samples_chromo = apply(mat_chromo > COUNT_MIN, 1,
+    samples_chromo = apply(mat_chromo >= opt$chromo_min, 1,
                            function(r) paste(chromo_cols[r], collapse = ", ")),
     specificite = case_when(
       n_wt_pos == 0 & n_chromo_pos >= 1 ~ "Chromo-spécifique",
-      n_wt_pos > 0 & n_wt_pos <= MAX_WT_POS &
-        n_chromo_pos >= MIN_CHROMO_POS & freq_wt <= MAX_FREQ_WT ~ "Quasi-spécifique",
+      n_wt_pos > 0 & n_wt_pos <= opt$max_wt_pos &
+        n_chromo_pos >= opt$min_chromo_pos & freq_wt <= opt$max_freq_wt ~ "Quasi-spécifique",
       n_wt_pos > 0 ~ "Partagée WT",
       TRUE ~ "Autre"
     )
   )
 
-# ── 4. PARSE seq_name → gènes + breakpoints ──────────────────────────────────
+# ── 4. PARSE seq_name → gènes + breakpoints + clé paire de gènes ─────────────
 mm <- str_match(spec$seq_name,
                 "^(.*?)_([A-Za-z0-9.]+:[0-9]+)_(.*)_([A-Za-z0-9.]+:[0-9]+)$")
 parsed <- spec %>%
   mutate(gene1 = mm[, 2], bp1 = str_remove(mm[, 3], "^chr"),
          gene2 = mm[, 4], bp2 = str_remove(mm[, 5], "^chr")) %>%
-  mutate(
-    g1n = resolve_alias(gene1), g2n = resolve_alias(gene2),
-    # Clé de matching = paire de gènes (orientation indifférente, alias résolus)
-    gkey   = map2_chr(g1n, g2n, ~ paste(sort(c(.x, .y)), collapse = "|")),
-    bp_key = map2_chr(bp1, bp2, ~ paste(sort(c(.x, .y)), collapse = "|")))
-n_unparsed <- sum(is.na(parsed$bp1))
-if (n_unparsed > 0)
-  warning(n_unparsed, " fusion(s) au seq_name non reconnu")
+  mutate(g1n = resolve_alias(gene1), g2n = resolve_alias(gene2),
+         gkey = map2_chr(g1n, g2n, ~ paste(sort(c(.x, .y)), collapse = "|")))
+if (sum(is.na(parsed$bp1)) > 0)
+  warning(sum(is.na(parsed$bp1)), " fusion(s) au seq_name non reconnu")
 
 # ── 5. CHARGEMENT & ANNOTATION ARRIBA ────────────────────────────────────────
-arriba_files <- list.files(DIR_ARRIBA, pattern = "^JB_.*\\.tsv$", full.names = TRUE)
+arriba_files <- list.files(opt$dir_arriba, pattern = "^JB_.*\\.tsv$", full.names = TRUE)
 arriba_files <- arriba_files[!str_detect(arriba_files, "_discarded")]
 if (length(arriba_files) == 0)
-  stop("Aucun fichier Arriba JB_*.tsv dans : ", DIR_ARRIBA)
+  stop("Aucun fichier Arriba JB_*.tsv dans : ", opt$dir_arriba)
 cat(length(arriba_files), "fichier(s) Arriba trouvé(s)\n")
 
 arriba <- map_dfr(arriba_files, function(f) {
-  read_tsv(f, show_col_types = FALSE,
-           col_types = cols(.default = col_character())) %>%
+  read_tsv(f, show_col_types = FALSE, col_types = cols(.default = col_character())) %>%
     mutate(sample = str_extract(basename(f), "JB_[0-9]+"))
 }) %>%
   rename(gene1 = `#gene1`) %>%
@@ -154,7 +216,6 @@ arriba <- map_dfr(arriba_files, function(f) {
     pos2 = suppressWarnings(as.numeric(str_split_fixed(breakpoint2, ":", 2)[, 2])),
     strand1_gene = str_split_fixed(`strand1(gene/fusion)`, "/", 2)[, 1],
     strand2_gene = str_split_fixed(`strand2(gene/fusion)`, "/", 2)[, 1],
-    # Clé de matching = paire de gènes (orientation indifférente, alias résolus)
     gkey = map2_chr(resolve_alias(gene1), resolve_alias(gene2),
                     ~ paste(sort(c(.x, .y)), collapse = "|")),
     total_reads = suppressWarnings(as.numeric(split_reads1) + as.numeric(split_reads2)),
@@ -180,8 +241,7 @@ arriba_sum <- arriba %>%
     a_gene1 = first(gene1), a_gene2 = first(gene2),
     a_breakpoint1 = first(breakpoint1), a_breakpoint2 = first(breakpoint2),
     site1 = first(site1), site2 = first(site2),
-    arriba_type     = first(type),
-    confidence      = first(confidence),
+    arriba_type = first(type), confidence = first(confidence),
     type_chimerique = first(type_chimerique),
     reading_frame = case_when(
       any(reading_frame == "in-frame",     na.rm = TRUE) ~ "in-frame",
@@ -204,48 +264,57 @@ arriba_sum <- arriba %>%
 annot <- parsed %>%
   left_join(arriba_sum, by = "gkey") %>%
   mutate(arriba_matched = !is.na(confidence),
-         type_chimerique = replace_na(type_chimerique, "Non confirmé Arriba"))
+         type_chimerique = replace_na(type_chimerique, "Non confirmé Arriba"),
+         is_who_interest = paste(g1n, g2n, sep = "--") %in% WHO_FUSIONS_INTEREST |
+                           paste(g2n, g1n, sep = "--") %in% WHO_FUSIONS_INTEREST,
+         is_who_interest = replace_na(is_who_interest, FALSE))
 
-# Annotation WHO (niveau fusion, alias résolus, deux orientations)
+# ── 7. SCORE BIOLOGIQUE PONDÉRÉ & PARAMÉTRABLE ───────────────────────────────
+# Chaque composante = fraction dans [0,1] × poids. Poids 0 => composante retirée.
+MAX_SCORE <- with(opt, w_type + w_conf + w_spec + w_who + w_frame + w_reads + w_coverage)
+if (MAX_SCORE <= 0) stop("Tous les poids sont nuls : score impossible.")
+
 annot <- annot %>%
   mutate(
-    is_who_interest = paste(g1n, g2n, sep = "--") %in% WHO_FUSIONS_INTEREST |
-                      paste(g2n, g1n, sep = "--") %in% WHO_FUSIONS_INTEREST,
-    is_who_interest = replace_na(is_who_interest, FALSE)
-  )
-
-# ── 7. SCORE BIOLOGIQUE ADAPTÉ ───────────────────────────────────────────────
-MAX_SCORE <- 12L + if (length(WHO_FUSIONS_INTEREST) > 0) 2L else 0L
-annot <- annot %>%
-  mutate(
-    score_A = case_when(
-      type_chimerique %in% c("Translocation", "Inversion") ~ 4L,
-      type_chimerique %in% c("Délétion", "Duplication")    ~ 2L,
-      type_chimerique == "Read-through"                    ~ 1L,
-      TRUE ~ 0L),
-    score_B = case_when(
-      str_detect(coalesce(confidence, ""), regex("high",   ignore_case = TRUE)) ~ 2L,
-      str_detect(coalesce(confidence, ""), regex("medium", ignore_case = TRUE)) ~ 1L,
-      TRUE ~ 0L),
-    score_C = case_when(n_wt_pos == 0 ~ 2L, n_wt_pos == 1 ~ 1L, TRUE ~ 0L),
-    score_E = if_else(is_who_interest, 2L, 0L),
-    score_G = case_when(reading_frame == "in-frame" ~ 2L,
-                        reading_frame == "out-of-frame" ~ 0L, TRUE ~ 1L),
-    score_H = case_when(coalesce(total_reads, 0) >= 50 ~ 2L,
-                        coalesce(total_reads, 0) >= 10 ~ 1L, TRUE ~ 0L),
-    score_total = score_A + score_B + score_C + score_E + score_G + score_H,
-    score_norm  = score_total / MAX_SCORE,
+    frac_type = case_when(
+      type_chimerique %in% c("Translocation", "Inversion") ~ 1.0,
+      type_chimerique %in% c("Délétion", "Duplication")    ~ 0.5,
+      type_chimerique == "Read-through"                    ~ 0.25,
+      TRUE ~ 0),
+    frac_conf = case_when(
+      str_detect(coalesce(confidence, ""), regex("high",   ignore_case = TRUE)) ~ 1.0,
+      str_detect(coalesce(confidence, ""), regex("medium", ignore_case = TRUE)) ~ 0.5,
+      TRUE ~ 0),
+    frac_spec = case_when(n_wt_pos == 0 ~ 1.0, n_wt_pos == 1 ~ 0.5, TRUE ~ 0),
+    frac_who  = if_else(is_who_interest, 1.0, 0),
+    frac_frame = case_when(reading_frame == "in-frame" ~ 1.0,
+                           reading_frame == "out-of-frame" ~ 0, TRUE ~ 0.5),
+    frac_reads = case_when(coalesce(total_reads, 0) >= 50 ~ 1.0,
+                           coalesce(total_reads, 0) >= 10 ~ 0.5, TRUE ~ 0),
+    frac_cov  = case_when(max_chromo >= 100 ~ 1.0, max_chromo >= 20 ~ 0.5,
+                          max_chromo >= opt$chromo_min ~ 0.25, TRUE ~ 0),
+    # sous-scores pondérés
+    score_type = frac_type  * opt$w_type,
+    score_conf = frac_conf  * opt$w_conf,
+    score_spec = frac_spec  * opt$w_spec,
+    score_who  = frac_who   * opt$w_who,
+    score_frame = frac_frame * opt$w_frame,
+    score_reads = frac_reads * opt$w_reads,
+    score_cov  = frac_cov   * opt$w_coverage,
+    score_total = score_type + score_conf + score_spec + score_who +
+                  score_frame + score_reads + score_cov,
+    score_norm = score_total / MAX_SCORE,
     priorite = factor(case_when(
       score_norm >= 0.65 ~ "P1", score_norm >= 0.40 ~ "P2",
-      score_norm >= 0.20 ~ "P3", TRUE ~ "NP"),
-      levels = c("P1", "P2", "P3", "NP"))
+      score_norm >= 0.20 ~ "P3", TRUE ~ "NP"), levels = c("P1", "P2", "P3", "NP"))
   )
 
 # ── 8. SORTIES TABLES ────────────────────────────────────────────────────────
 out_cols <- c(
   "seq_name", "gene1", "bp1", "gene2", "bp2", "specificite", "is_who_interest",
-  "score_norm", "priorite", "score_A", "score_B", "score_C",
-  "score_E", "score_G", "score_H",
+  "score_norm", "priorite",
+  "score_type", "score_conf", "score_spec", "score_who", "score_frame",
+  "score_reads", "score_cov",
   "n_chromo_pos", "freq_chromo", "n_wt_pos", "freq_wt", "max_chromo", "max_wt",
   "samples_chromo", "n_fichiers",
   "arriba_matched", "type_chimerique", "class_ruffle", "reading_frame",
@@ -253,8 +322,7 @@ out_cols <- c(
   "split_reads1", "split_reads2", "total_reads", "coverage1", "coverage2",
   "retained_protein_domains", "transcript_id1", "transcript_id2",
   "direction1", "direction2", "tags",
-  "a_gene1", "a_gene2", "a_breakpoint1", "a_breakpoint2",
-  "n_arriba", "samples_arriba")
+  "a_gene1", "a_gene2", "a_breakpoint1", "a_breakpoint2", "n_arriba", "samples_arriba")
 annot_out <- annot %>% select(any_of(out_cols)) %>% arrange(desc(score_norm))
 
 write_tsv(annot_out, file.path(DIR_OUT, "fusions_all_specificite_annotees.tsv"))
@@ -267,13 +335,14 @@ has_pheatmap <- requireNamespace("pheatmap",    quietly = TRUE)
 has_repel    <- requireNamespace("ggrepel",     quietly = TRUE)
 has_karyo    <- requireNamespace("karyoploteR", quietly = TRUE) &&
                 requireNamespace("GenomicRanges", quietly = TRUE)
+N_TOP <- opt$n_top
 
 fig_df <- annot %>%
   filter(specificite %in% c("Chromo-spécifique", "Quasi-spécifique")) %>%
   mutate(fusion_label = paste(gene1, gene2, sep = "--"),
          type_chimerique = factor(type_chimerique, levels = names(TYPE_COLORS)))
 
-# 9a. Barplot — top N par expression max, coloré par type chimérique
+# 9a. Barplot — top N par expression max
 bar_df <- fig_df %>% slice_max(max_chromo, n = N_TOP, with_ties = FALSE) %>%
   mutate(fusion_ord = reorder(fusion_label, max_chromo))
 p_bar <- ggplot(bar_df, aes(fusion_ord, max_chromo, fill = type_chimerique)) +
@@ -284,7 +353,7 @@ p_bar <- ggplot(bar_df, aes(fusion_ord, max_chromo, fill = type_chimerique)) +
   scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
   labs(title = paste0("Top ", N_TOP, " fusions chromo-spécifiques — expression"),
        subtitle = "n = nb d'échantillons JB positifs",
-       x = NULL, y = "Comptage k-mers max (chromo)") +
+       x = NULL, y = "Comptage k-mer max (chromo)") +
   theme(axis.text.y = element_text(size = 7))
 ggsave(file.path(DIR_FIG, "barplot_fusions.png"), p_bar, width = 11, height = 9, dpi = 150)
 
@@ -318,14 +387,22 @@ if (has_repel)
     max.overlaps = 20, show.legend = FALSE)
 ggsave(file.path(DIR_FIG, "volcano_fusions.png"), p_vol, width = 11, height = 7, dpi = 150)
 
-# 9c. Décomposition du score — top N
-COMP_LABELS <- c(score_A = "A — Type", score_B = "B — Conf.", score_C = "C — Spéc. WT",
-                 score_E = "E — Gènes", score_G = "G — Cadre", score_H = "H — Reads")
+# 9c. Décomposition du score — seulement les composantes actives (poids > 0)
+comp_def <- tibble::tribble(
+  ~col,          ~label,            ~weight,
+  "score_type",  "Type",            opt$w_type,
+  "score_conf",  "Confiance",       opt$w_conf,
+  "score_spec",  "Spéc. WT",        opt$w_spec,
+  "score_who",   "WHO",             opt$w_who,
+  "score_frame", "Cadre",           opt$w_frame,
+  "score_reads", "Reads",           opt$w_reads,
+  "score_cov",   "Couverture",      opt$w_coverage
+) %>% filter(weight > 0)
 dec_df <- fig_df %>% slice_max(score_norm, n = N_TOP, with_ties = FALSE) %>%
   mutate(fusion_ord = reorder(fusion_label, score_norm)) %>%
-  pivot_longer(c(score_A, score_B, score_C, score_E, score_G, score_H),
-               names_to = "comp", values_to = "val") %>%
-  mutate(comp = factor(COMP_LABELS[comp], levels = COMP_LABELS))
+  pivot_longer(all_of(comp_def$col), names_to = "comp", values_to = "val") %>%
+  mutate(comp = factor(setNames(comp_def$label, comp_def$col)[comp],
+                       levels = comp_def$label))
 p_dec <- ggplot(dec_df, aes(val, fusion_ord, fill = comp)) +
   geom_col(width = 0.7) +
   scale_fill_brewer(palette = "Set2", name = NULL) +
@@ -334,9 +411,9 @@ p_dec <- ggplot(dec_df, aes(val, fusion_ord, fill = comp)) +
   theme(axis.text.y = element_text(size = 7), legend.position = "bottom")
 ggsave(file.path(DIR_FIG, "score_decomposition.png"), p_dec, width = 11, height = 9, dpi = 150)
 
-# 9d. Heatmap présence/absence (top score) à travers les échantillons JB
+# 9d. Heatmap présence/absence (top score)
 if (has_pheatmap) {
-  bin <- (mat_chromo > COUNT_MIN) * 1L
+  bin <- (mat_chromo >= opt$chromo_min) * 1L
   top_seq <- fig_df %>% slice_max(score_norm, n = 40, with_ties = FALSE) %>% pull(seq_name)
   bin_top <- bin[rownames(bin) %in% top_seq, , drop = FALSE]
   if (nrow(bin_top) > 1) {
@@ -354,8 +431,7 @@ if (has_pheatmap) {
       annotation_row = ar, cluster_cols = TRUE, legend = FALSE,
       fontsize_row = 7, fontsize_col = 7,
       main = "Présence/absence — fusions chromo-spécifiques (top score)",
-      filename = file.path(DIR_FIG, "heatmap_fusions.png"),
-      width = 10, height = 11)
+      filename = file.path(DIR_FIG, "heatmap_fusions.png"), width = 10, height = 11)
   }
 }
 
@@ -370,13 +446,12 @@ if (has_karyo) {
       type_chimerique = as.character(type_chimerique)) %>%
     filter(!is.na(pos1), !is.na(pos2))
   if (nrow(ks) > 0) {
-    png(file.path(DIR_FIG, "karyotype_overview.png"),
-        width = 1300, height = 1000, res = 120)
+    png(file.path(DIR_FIG, "karyotype_overview.png"), width = 1300, height = 1000, res = 120)
     kp <- karyoploteR::plotKaryotype(genome = "hg38",
             main = "Breakpoints des fusions chromo-spécifiques (Arriba)")
-    for (i in seq_len(nrow(ks))) {
-      r <- ks[i, ]
-      col <- TYPE_COLORS[r$type_chimerique]; if (is.na(col)) col <- "grey50"
+    for (j in seq_len(nrow(ks))) {
+      r <- ks[j, ]; col <- TYPE_COLORS[r$type_chimerique]
+      if (is.na(col)) col <- "grey50"
       try(karyoploteR::kpPlotLinks(
         kp,
         data  = GenomicRanges::GRanges(r$chr1, IRanges::IRanges(r$pos1, width = 1)),
@@ -395,7 +470,6 @@ cat("\nChromo/quasi-spécifiques :", nrow(chromo_spec),
     "| matchées Arriba :", sum(chromo_spec$arriba_matched), "\n")
 cat("\nPriorités (chromo/quasi-spécifiques) :\n")
 print(count(chromo_spec, priorite))
-cat("\nFigures écrites dans :", DIR_FIG, "\n")
-cat("Tables  écrites dans :", DIR_OUT, "\n")
+cat("\nScore /", MAX_SCORE, "pts | Figures :", DIR_FIG, "| Tables :", DIR_OUT, "\n")
 if (!has_pheatmap) cat("(pheatmap absent → heatmap non générée)\n")
 if (!has_karyo)    cat("(karyoploteR/GenomicRanges absents → karyotype non généré)\n")
