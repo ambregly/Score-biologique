@@ -29,9 +29,19 @@ MAX_FREQ_WT      <- 0.05     # Règle 2 : fréquence WT maximum
 READTHROUGH_DIST <- 300000   # seuil read-through (Rufflé 2024) en pb
 N_TOP            <- 30        # nb de fusions affichées dans les figures
 
-# Composante E (optionnelle) : gènes/fusions drivers d'intérêt.
-# Laisser vide, ou remplir ex : c("KMT2A","RUNX1","MECOM","NUP98")
-GENES_INTEREST <- character(0)
+# Composante E : fusions WHO d'intérêt clinique (reprise du pipeline LAM).
+# Test au niveau fusion (gene1--gene2), dans les deux orientations, après
+# résolution des alias HGNC ci-dessous.
+WHO_FUSIONS_INTEREST <- c(
+  "RUNX1--RUNX1T1", "CBFB--MYH11", "PML--RARA", "KMT2A--MLLT3",
+  "DEK--NUP214", "NUP98--NSD1", "BCR--ABL1", "NRIP1--MIR99AHG"
+)
+GENE_ALIASES <- c(
+  MLL = "KMT2A", HRX = "KMT2A", ALL1 = "KMT2A", MLL1 = "KMT2A", TRX1 = "KMT2A",
+  AF9 = "MLLT3", LTG9 = "MLLT3", AF6 = "MLLT4", AFDN = "MLLT4", ENL = "MLLT1",
+  ETO = "RUNX1T1", MTG8 = "RUNX1T1", CBFA2T1 = "RUNX1T1", BCR1 = "BCR"
+)
+resolve_alias <- function(g) ifelse(g %in% names(GENE_ALIASES), GENE_ALIASES[g], g)
 
 dir.create(DIR_OUT, showWarnings = FALSE, recursive = TRUE)
 dir.create(DIR_FIG, showWarnings = FALSE, recursive = TRUE)
@@ -191,8 +201,17 @@ annot <- parsed %>%
   mutate(arriba_matched = !is.na(confidence),
          type_chimerique = replace_na(type_chimerique, "Non confirmé Arriba"))
 
+# Annotation WHO (niveau fusion, alias résolus, deux orientations)
+annot <- annot %>%
+  mutate(
+    g1n = resolve_alias(gene1), g2n = resolve_alias(gene2),
+    is_who_interest = paste(g1n, g2n, sep = "--") %in% WHO_FUSIONS_INTEREST |
+                      paste(g2n, g1n, sep = "--") %in% WHO_FUSIONS_INTEREST,
+    is_who_interest = replace_na(is_who_interest, FALSE)
+  )
+
 # ── 7. SCORE BIOLOGIQUE ADAPTÉ ───────────────────────────────────────────────
-MAX_SCORE <- 12L + if (length(GENES_INTEREST) > 0) 2L else 0L
+MAX_SCORE <- 12L + if (length(WHO_FUSIONS_INTEREST) > 0) 2L else 0L
 annot <- annot %>%
   mutate(
     score_A = case_when(
@@ -205,7 +224,7 @@ annot <- annot %>%
       str_detect(coalesce(confidence, ""), regex("medium", ignore_case = TRUE)) ~ 1L,
       TRUE ~ 0L),
     score_C = case_when(n_wt_pos == 0 ~ 2L, n_wt_pos == 1 ~ 1L, TRUE ~ 0L),
-    score_E = if_else(gene1 %in% GENES_INTEREST | gene2 %in% GENES_INTEREST, 2L, 0L),
+    score_E = if_else(is_who_interest, 2L, 0L),
     score_G = case_when(reading_frame == "in-frame" ~ 2L,
                         reading_frame == "out-of-frame" ~ 0L, TRUE ~ 1L),
     score_H = case_when(coalesce(total_reads, 0) >= 50 ~ 2L,
@@ -220,7 +239,7 @@ annot <- annot %>%
 
 # ── 8. SORTIES TABLES ────────────────────────────────────────────────────────
 out_cols <- c(
-  "seq_name", "gene1", "bp1", "gene2", "bp2", "specificite",
+  "seq_name", "gene1", "bp1", "gene2", "bp2", "specificite", "is_who_interest",
   "score_norm", "priorite", "score_A", "score_B", "score_C",
   "score_E", "score_G", "score_H",
   "n_chromo_pos", "freq_chromo", "n_wt_pos", "freq_wt", "max_chromo", "max_wt",
@@ -267,6 +286,7 @@ ggsave(file.path(DIR_FIG, "barplot_fusions.png"), p_bar, width = 11, height = 9,
 
 # 9b. Volcano — score vs fréquence chromo
 vol_df <- fig_df %>% mutate(categorie = case_when(
+  is_who_interest                                       ~ "WHO intérêt",
   specificite == "Chromo-spécifique" & priorite == "P1" ~ "Chromo-spéc. P1",
   specificite == "Chromo-spécifique"                    ~ "Chromo-spéc.",
   TRUE                                                  ~ "Quasi-spéc."))
@@ -277,7 +297,8 @@ p_vol <- ggplot(vol_df, aes(score_norm, freq_chromo,
   geom_vline(xintercept = 0.20, linetype = "dotdash", color = "grey60") +
   geom_point(size = 2.6, alpha = 0.85, stroke = 0.4) +
   scale_shape_manual(values = TYPE_SHAPES, drop = FALSE, name = "Type chimérique") +
-  scale_color_manual(values = c("Chromo-spéc. P1" = "#d62728",
+  scale_color_manual(values = c("WHO intérêt" = "#7b0000",
+                                "Chromo-spéc. P1" = "#d62728",
                                 "Chromo-spéc." = "#2ca02c",
                                 "Quasi-spéc." = "#1f77b4"), name = "Catégorie") +
   scale_x_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1)) +
@@ -287,7 +308,8 @@ p_vol <- ggplot(vol_df, aes(score_norm, freq_chromo,
        x = "Score biologique normalisé", y = "Fréquence cohorte chromo")
 if (has_repel)
   p_vol <- p_vol + ggrepel::geom_text_repel(
-    data = vol_df %>% slice_max(score_norm, n = 15, with_ties = FALSE),
+    data = vol_df %>% filter(is_who_interest |
+             score_norm >= sort(score_norm, decreasing = TRUE)[min(15, n())]),
     aes(label = fusion_label), size = 2.5, color = "grey20",
     max.overlaps = 20, show.legend = FALSE)
 ggsave(file.path(DIR_FIG, "volcano_fusions.png"), p_vol, width = 11, height = 7, dpi = 150)
