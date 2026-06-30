@@ -125,7 +125,11 @@ mm <- str_match(spec$seq_name,
 parsed <- spec %>%
   mutate(gene1 = mm[, 2], bp1 = str_remove(mm[, 3], "^chr"),
          gene2 = mm[, 4], bp2 = str_remove(mm[, 5], "^chr")) %>%
-  mutate(bp_key = map2_chr(bp1, bp2, ~ paste(sort(c(.x, .y)), collapse = "|")))
+  mutate(
+    g1n = resolve_alias(gene1), g2n = resolve_alias(gene2),
+    # Clé de matching = paire de gènes (orientation indifférente, alias résolus)
+    gkey   = map2_chr(g1n, g2n, ~ paste(sort(c(.x, .y)), collapse = "|")),
+    bp_key = map2_chr(bp1, bp2, ~ paste(sort(c(.x, .y)), collapse = "|")))
 n_unparsed <- sum(is.na(parsed$bp1))
 if (n_unparsed > 0)
   warning(n_unparsed, " fusion(s) au seq_name non reconnu")
@@ -150,8 +154,9 @@ arriba <- map_dfr(arriba_files, function(f) {
     pos2 = suppressWarnings(as.numeric(str_split_fixed(breakpoint2, ":", 2)[, 2])),
     strand1_gene = str_split_fixed(`strand1(gene/fusion)`, "/", 2)[, 1],
     strand2_gene = str_split_fixed(`strand2(gene/fusion)`, "/", 2)[, 1],
-    bp_key   = map2_chr(paste0(chr1, ":", pos1), paste0(chr2, ":", pos2),
-                        ~ paste(sort(c(.x, .y)), collapse = "|")),
+    # Clé de matching = paire de gènes (orientation indifférente, alias résolus)
+    gkey = map2_chr(resolve_alias(gene1), resolve_alias(gene2),
+                    ~ paste(sort(c(.x, .y)), collapse = "|")),
     total_reads = suppressWarnings(as.numeric(split_reads1) + as.numeric(split_reads2)),
     conf_num = case_when(
       str_detect(confidence, regex("high",   ignore_case = TRUE)) ~ 3L,
@@ -170,7 +175,7 @@ arriba <- map_dfr(arriba_files, function(f) {
 
 arriba_sum <- arriba %>%
   arrange(desc(conf_num)) %>%
-  group_by(bp_key) %>%
+  group_by(gkey) %>%
   summarise(
     a_gene1 = first(gene1), a_gene2 = first(gene2),
     a_breakpoint1 = first(breakpoint1), a_breakpoint2 = first(breakpoint2),
@@ -195,16 +200,15 @@ arriba_sum <- arriba %>%
   mutate(total_reads = ifelse(is.finite(total_reads), total_reads, NA_real_),
          class_ruffle = unname(TYPE_CLASS[type_chimerique]))
 
-# ── 6. JOINTURE ──────────────────────────────────────────────────────────────
+# ── 6. JOINTURE (sur la paire de gènes) ──────────────────────────────────────
 annot <- parsed %>%
-  left_join(arriba_sum, by = "bp_key") %>%
+  left_join(arriba_sum, by = "gkey") %>%
   mutate(arriba_matched = !is.na(confidence),
          type_chimerique = replace_na(type_chimerique, "Non confirmé Arriba"))
 
 # Annotation WHO (niveau fusion, alias résolus, deux orientations)
 annot <- annot %>%
   mutate(
-    g1n = resolve_alias(gene1), g2n = resolve_alias(gene2),
     is_who_interest = paste(g1n, g2n, sep = "--") %in% WHO_FUSIONS_INTEREST |
                       paste(g2n, g1n, sep = "--") %in% WHO_FUSIONS_INTEREST,
     is_who_interest = replace_na(is_who_interest, FALSE)
