@@ -2,38 +2,30 @@
 # =============================================================================
 # Analyse fusions — projet Chromoanagenesis-AML (JB_GAILLARD)
 # -----------------------------------------------------------------------------
-#   1. comptages mergés chromo + WT  -> spécificité tumorale (chromo vs WT)
+#   1. comptages mergés patho (JB_*) + WT  -> spécificité tumorale
 #   2. matching Arriba (clé = paire de gènes) -> caractéristiques
 #   3. score biologique pondéré & paramétrable -> priorités P1/P2/P3
 #   4. figures : barplot, volcano, heatmap, décomposition du score, karyotype
 #
 # Inspiré du pipeline LAM — sans survie ni Cox.
 #
-# Usage :
-#   Rscript analyse_fusions_chromoAML.R [options]
+# Usage : Rscript analyse_fusions_chromoAML.R [options]
 #
-# Options de filtrage (comptage max par individu) :
-#   --wt-min N         WT positif si comptage  > N        (défaut 0)
-#   --chromo-min N     chromo positif si comptage >= N    (défaut 5)
-#   --max-wt-pos N     Règle 2 : WT positifs max          (défaut 2)
-#   --min-chromo-pos N Règle 2 : chromo positifs min      (défaut 5)
-#   --max-freq-wt F    Règle 2 : fréquence WT max         (défaut 0.05)
+# Filtres (basés sur le comptage MAX par cohorte ; toujours actifs) :
+#   --wt-min N     fusion retenue si max(WT)    <= N   (défaut 0 : absente des WT)
+#   --patho-min N  fusion retenue si max(patho) >= N   (défaut 5)
 #
-# Poids des composantes du score (0 = composante retirée) :
-#   --type N      type chimérique     (défaut 4)
-#   --conf N      confidence Arriba   (défaut 2)
-#   --spec N      spécificité WT      (défaut 2)
-#   --who N       fusion WHO          (défaut 2)
-#   --frame N     reading frame       (défaut 2)
-#   --reads N     reads Arriba        (défaut 2)
-#   --coverage N  comptage k-mer      (défaut 0)
+# Poids des composantes du score (0 = composante retirée du calcul) :
+#   --type N   type chimérique   (défaut 4)
+#   --conf N   confidence Arriba (défaut 2)
+#   --spec N   spécificité WT    (défaut 2)
+#   --who N    fusion WHO        (défaut 2)
+#   --frame N  reading frame     (défaut 2)
+#   --reads N  reads Arriba      (défaut 2)
 #
-# Autres :
-#   --n-top N     nb de fusions dans les figures (défaut 30)
-#   --dir-merge / --dir-arriba / --dir-out   chemins
-#   --help        affiche cette aide
+# Autres : --n-top N | --dir-merge | --dir-arriba | --dir-out | --help
 #
-# Exemple : Rscript analyse_fusions_chromoAML.R --coverage 3 --who 3 --chromo-min 10
+# Exemple : Rscript analyse_fusions_chromoAML.R --who 3 --patho-min 10
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -46,30 +38,23 @@ opt <- list(
   dir_merge  = "/scratch/ambre/JB_chromo_wt_merge1",
   dir_arriba = "/data/nas/projects/2025/JB_GAILLARD/analysis/trimmed/starriba",
   dir_out    = "/scratch/ambre/analyse_fusions",
-  # filtres
-  wt_min = 0, chromo_min = 5,
-  max_wt_pos = 2, min_chromo_pos = 5, max_freq_wt = 0.05,
-  # figures
-  n_top = 30,
-  # poids des composantes du score
-  w_type = 4, w_conf = 2, w_spec = 2, w_who = 2, w_frame = 2, w_reads = 2,
-  w_coverage = 0
+  wt_min = 0, patho_min = 5,          # filtres (sur le max par cohorte)
+  n_top = 30,                          # figures
+  w_type = 4, w_conf = 2, w_spec = 2, w_who = 2, w_frame = 2, w_reads = 2
 )
 READTHROUGH_DIST <- 300000   # seuil read-through (Rufflé 2024) en pb
 
 # ── PARSER CLI ───────────────────────────────────────────────────────────────
 alias <- c(type = "w_type", conf = "w_conf", confidence = "w_conf",
            spec = "w_spec", specificity = "w_spec", who = "w_who",
-           frame = "w_frame", reads = "w_reads", coverage = "w_coverage",
-           cov = "w_coverage")
+           frame = "w_frame", reads = "w_reads")
 string_opts <- c("dir_merge", "dir_arriba", "dir_out")
 
 args <- commandArgs(trailingOnly = TRUE)
 if ("--help" %in% args || "-h" %in% args) {
-  cat("Voir l'entête du script pour la liste des options.\n")
-  cat("Options : --wt-min --chromo-min --max-wt-pos --min-chromo-pos",
-      "--max-freq-wt --type --conf --spec --who --frame --reads --coverage",
-      "--n-top --dir-merge --dir-arriba --dir-out\n")
+  cat("Options : --wt-min --patho-min --type --conf --spec --who --frame",
+      "--reads --n-top --dir-merge --dir-arriba --dir-out\n")
+  cat("Voir l'entête du script pour le détail.\n")
   quit(status = 0)
 }
 
@@ -102,11 +87,9 @@ dir.create(DIR_FIG, showWarnings = FALSE, recursive = TRUE)
 theme_set(theme_bw(base_size = 12))
 
 cat("=== CONFIGURATION ===\n")
-cat(sprintf("Filtres : WT > %s | chromo >= %s | Règle2 (WT<=%s, chromo>=%s, freqWT<=%s)\n",
-            opt$wt_min, opt$chromo_min, opt$max_wt_pos, opt$min_chromo_pos, opt$max_freq_wt))
-cat(sprintf("Poids   : type=%s conf=%s spec=%s who=%s frame=%s reads=%s coverage=%s\n\n",
-            opt$w_type, opt$w_conf, opt$w_spec, opt$w_who, opt$w_frame,
-            opt$w_reads, opt$w_coverage))
+cat(sprintf("Filtres : max(WT) <= %s  |  max(patho) >= %s\n", opt$wt_min, opt$patho_min))
+cat(sprintf("Poids   : type=%s conf=%s spec=%s who=%s frame=%s reads=%s\n\n",
+            opt$w_type, opt$w_conf, opt$w_spec, opt$w_who, opt$w_frame, opt$w_reads))
 
 # ── Fusions WHO d'intérêt (composante E) + alias HGNC ─────────────────────────
 WHO_FUSIONS_INTEREST <- c(
@@ -145,10 +128,10 @@ cat(length(merge_files), "fichier(s) de comptage trouvé(s)\n")
 
 raw_stacked <- map_dfr(merge_files, ~ read_tsv(.x, show_col_types = FALSE) %>%
                          mutate(source_file = basename(.x)))
-all_cols    <- setdiff(names(raw_stacked), c("seq_name", "source_file"))
-chromo_cols <- all_cols[str_starts(all_cols, "JB_")]
-wt_cols     <- setdiff(all_cols, chromo_cols)
-cat(length(chromo_cols), "colonnes chromo |", length(wt_cols), "colonnes WT\n")
+all_cols   <- setdiff(names(raw_stacked), c("seq_name", "source_file"))
+patho_cols <- all_cols[str_starts(all_cols, "JB_")]
+wt_cols    <- setdiff(all_cols, patho_cols)
+cat(length(patho_cols), "colonnes patho (JB_) |", length(wt_cols), "colonnes WT\n")
 
 raw_stacked <- raw_stacked %>%
   mutate(across(all_of(all_cols), ~ suppressWarnings(as.numeric(.x))))
@@ -161,28 +144,28 @@ agg <- raw_stacked %>%
   mutate(across(all_of(all_cols), ~ ifelse(is.finite(.x), .x, 0)))
 cat(nrow(agg), "fusions uniques après agrégation MAX\n")
 
-# ── 3. SPÉCIFICITÉ TUMORALE (filtres paramétrables) ──────────────────────────
-mat_chromo <- as.matrix(agg[, chromo_cols]); rownames(mat_chromo) <- agg$seq_name
-mat_wt     <- as.matrix(agg[, wt_cols])
-n_chromo   <- length(chromo_cols); n_wt <- length(wt_cols)
+# ── 3. SPÉCIFICITÉ TUMORALE (filtres sur le max par cohorte) ─────────────────
+mat_patho <- as.matrix(agg[, patho_cols]); rownames(mat_patho) <- agg$seq_name
+mat_wt    <- as.matrix(agg[, wt_cols])
+n_patho   <- length(patho_cols); n_wt <- length(wt_cols)
 
 spec <- agg %>%
   transmute(seq_name, n_fichiers) %>%
   mutate(
-    n_chromo_pos   = rowSums(mat_chromo >= opt$chromo_min),  # chromo : >= seuil
-    n_wt_pos       = rowSums(mat_wt     >  opt$wt_min),      # WT     : > seuil
-    freq_chromo    = n_chromo_pos / n_chromo,
-    freq_wt        = n_wt_pos / n_wt,
-    max_chromo     = apply(mat_chromo, 1, max),
-    max_wt         = apply(mat_wt,     1, max),
-    samples_chromo = apply(mat_chromo >= opt$chromo_min, 1,
-                           function(r) paste(chromo_cols[r], collapse = ", ")),
+    max_patho   = apply(mat_patho, 1, max),
+    max_wt      = apply(mat_wt,    1, max),
+    # positivité par individu (pour la fréquence / les figures)
+    n_patho_pos = rowSums(mat_patho >= opt$patho_min),
+    n_wt_pos    = rowSums(mat_wt    >  opt$wt_min),
+    freq_patho  = n_patho_pos / n_patho,
+    freq_wt     = n_wt_pos / n_wt,
+    samples_patho = apply(mat_patho >= opt$patho_min, 1,
+                          function(r) paste(patho_cols[r], collapse = ", ")),
+    # sélection : strictement absente des WT ET assez exprimée en patho
     specificite = case_when(
-      n_wt_pos == 0 & n_chromo_pos >= 1 ~ "Chromo-spécifique",
-      n_wt_pos > 0 & n_wt_pos <= opt$max_wt_pos &
-        n_chromo_pos >= opt$min_chromo_pos & freq_wt <= opt$max_freq_wt ~ "Quasi-spécifique",
-      n_wt_pos > 0 ~ "Partagée WT",
-      TRUE ~ "Autre"
+      max_wt <= opt$wt_min & max_patho >= opt$patho_min ~ "Chromo-spécifique",
+      max_wt >  opt$wt_min                              ~ "Présente WT",
+      TRUE                                              ~ "Sous seuil patho"
     )
   )
 
@@ -271,7 +254,7 @@ annot <- parsed %>%
 
 # ── 7. SCORE BIOLOGIQUE PONDÉRÉ & PARAMÉTRABLE ───────────────────────────────
 # Chaque composante = fraction dans [0,1] × poids. Poids 0 => composante retirée.
-MAX_SCORE <- with(opt, w_type + w_conf + w_spec + w_who + w_frame + w_reads + w_coverage)
+MAX_SCORE <- with(opt, w_type + w_conf + w_spec + w_who + w_frame + w_reads)
 if (MAX_SCORE <= 0) stop("Tous les poids sont nuls : score impossible.")
 
 annot <- annot %>%
@@ -291,18 +274,14 @@ annot <- annot %>%
                            reading_frame == "out-of-frame" ~ 0, TRUE ~ 0.5),
     frac_reads = case_when(coalesce(total_reads, 0) >= 50 ~ 1.0,
                            coalesce(total_reads, 0) >= 10 ~ 0.5, TRUE ~ 0),
-    frac_cov  = case_when(max_chromo >= 100 ~ 1.0, max_chromo >= 20 ~ 0.5,
-                          max_chromo >= opt$chromo_min ~ 0.25, TRUE ~ 0),
-    # sous-scores pondérés
-    score_type = frac_type  * opt$w_type,
-    score_conf = frac_conf  * opt$w_conf,
-    score_spec = frac_spec  * opt$w_spec,
-    score_who  = frac_who   * opt$w_who,
+    score_type  = frac_type  * opt$w_type,
+    score_conf  = frac_conf  * opt$w_conf,
+    score_spec  = frac_spec  * opt$w_spec,
+    score_who   = frac_who   * opt$w_who,
     score_frame = frac_frame * opt$w_frame,
     score_reads = frac_reads * opt$w_reads,
-    score_cov  = frac_cov   * opt$w_coverage,
     score_total = score_type + score_conf + score_spec + score_who +
-                  score_frame + score_reads + score_cov,
+                  score_frame + score_reads,
     score_norm = score_total / MAX_SCORE,
     priorite = factor(case_when(
       score_norm >= 0.65 ~ "P1", score_norm >= 0.40 ~ "P2",
@@ -313,10 +292,9 @@ annot <- annot %>%
 out_cols <- c(
   "seq_name", "gene1", "bp1", "gene2", "bp2", "specificite", "is_who_interest",
   "score_norm", "priorite",
-  "score_type", "score_conf", "score_spec", "score_who", "score_frame",
-  "score_reads", "score_cov",
-  "n_chromo_pos", "freq_chromo", "n_wt_pos", "freq_wt", "max_chromo", "max_wt",
-  "samples_chromo", "n_fichiers",
+  "score_type", "score_conf", "score_spec", "score_who", "score_frame", "score_reads",
+  "n_patho_pos", "freq_patho", "n_wt_pos", "freq_wt", "max_patho", "max_wt",
+  "samples_patho", "n_fichiers",
   "arriba_matched", "type_chimerique", "class_ruffle", "reading_frame",
   "confidence", "arriba_type", "site1", "site2",
   "split_reads1", "split_reads2", "total_reads", "coverage1", "coverage2",
@@ -326,8 +304,7 @@ out_cols <- c(
 annot_out <- annot %>% select(any_of(out_cols)) %>% arrange(desc(score_norm))
 
 write_tsv(annot_out, file.path(DIR_OUT, "fusions_all_specificite_annotees.tsv"))
-chromo_spec <- annot_out %>%
-  filter(specificite %in% c("Chromo-spécifique", "Quasi-spécifique"))
+chromo_spec <- annot_out %>% filter(specificite == "Chromo-spécifique")
 write_tsv(chromo_spec, file.path(DIR_OUT, "fusions_chromo_specifiques_annotees.tsv"))
 
 # ── 9. FIGURES ───────────────────────────────────────────────────────────────
@@ -338,32 +315,31 @@ has_karyo    <- requireNamespace("karyoploteR", quietly = TRUE) &&
 N_TOP <- opt$n_top
 
 fig_df <- annot %>%
-  filter(specificite %in% c("Chromo-spécifique", "Quasi-spécifique")) %>%
+  filter(specificite == "Chromo-spécifique") %>%
   mutate(fusion_label = paste(gene1, gene2, sep = "--"),
          type_chimerique = factor(type_chimerique, levels = names(TYPE_COLORS)))
 
 # 9a. Barplot — top N par expression max
-bar_df <- fig_df %>% slice_max(max_chromo, n = N_TOP, with_ties = FALSE) %>%
-  mutate(fusion_ord = reorder(fusion_label, max_chromo))
-p_bar <- ggplot(bar_df, aes(fusion_ord, max_chromo, fill = type_chimerique)) +
+bar_df <- fig_df %>% slice_max(max_patho, n = N_TOP, with_ties = FALSE) %>%
+  mutate(fusion_ord = reorder(fusion_label, max_patho))
+p_bar <- ggplot(bar_df, aes(fusion_ord, max_patho, fill = type_chimerique)) +
   geom_col() +
-  geom_text(aes(label = paste0("n=", n_chromo_pos)), hjust = -0.1, size = 2.5) +
+  geom_text(aes(label = paste0("n=", n_patho_pos)), hjust = -0.1, size = 2.5) +
   coord_flip() +
   scale_fill_manual(values = TYPE_COLORS, drop = FALSE, name = "Type chimérique") +
   scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
   labs(title = paste0("Top ", N_TOP, " fusions chromo-spécifiques — expression"),
-       subtitle = "n = nb d'échantillons JB positifs",
-       x = NULL, y = "Comptage k-mer max (chromo)") +
+       subtitle = "n = nb d'échantillons patho positifs",
+       x = NULL, y = "Comptage k-mer max (patho)") +
   theme(axis.text.y = element_text(size = 7))
 ggsave(file.path(DIR_FIG, "barplot_fusions.png"), p_bar, width = 11, height = 9, dpi = 150)
 
-# 9b. Volcano — score vs fréquence chromo
+# 9b. Volcano — score vs fréquence patho
 vol_df <- fig_df %>% mutate(categorie = case_when(
-  is_who_interest                                       ~ "WHO intérêt",
-  specificite == "Chromo-spécifique" & priorite == "P1" ~ "Chromo-spéc. P1",
-  specificite == "Chromo-spécifique"                    ~ "Chromo-spéc.",
-  TRUE                                                  ~ "Quasi-spéc."))
-p_vol <- ggplot(vol_df, aes(score_norm, freq_chromo,
+  is_who_interest    ~ "WHO intérêt",
+  priorite == "P1"   ~ "Chromo-spéc. P1",
+  TRUE               ~ "Chromo-spéc."))
+p_vol <- ggplot(vol_df, aes(score_norm, freq_patho,
                             shape = type_chimerique, color = categorie)) +
   geom_vline(xintercept = 0.65, linetype = "dashed",  color = "grey30") +
   geom_vline(xintercept = 0.40, linetype = "dotted",  color = "grey45") +
@@ -372,13 +348,12 @@ p_vol <- ggplot(vol_df, aes(score_norm, freq_chromo,
   scale_shape_manual(values = TYPE_SHAPES, drop = FALSE, name = "Type chimérique") +
   scale_color_manual(values = c("WHO intérêt" = "#7b0000",
                                 "Chromo-spéc. P1" = "#d62728",
-                                "Chromo-spéc." = "#2ca02c",
-                                "Quasi-spéc." = "#1f77b4"), name = "Catégorie") +
+                                "Chromo-spéc." = "#2ca02c"), name = "Catégorie") +
   scale_x_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1)) +
   scale_y_continuous(labels = percent_format(accuracy = 1)) +
   labs(title = "Score biologique vs fréquence — fusions chromo-spécifiques",
        subtitle = paste0("Score / ", MAX_SCORE, " pts  |  seuils P1=65% P2=40% P3=20%"),
-       x = "Score biologique normalisé", y = "Fréquence cohorte chromo")
+       x = "Score biologique normalisé", y = "Fréquence cohorte patho")
 if (has_repel)
   p_vol <- p_vol + ggrepel::geom_text_repel(
     data = vol_df %>% filter(is_who_interest |
@@ -389,14 +364,13 @@ ggsave(file.path(DIR_FIG, "volcano_fusions.png"), p_vol, width = 11, height = 7,
 
 # 9c. Décomposition du score — seulement les composantes actives (poids > 0)
 comp_def <- tibble::tribble(
-  ~col,          ~label,            ~weight,
-  "score_type",  "Type",            opt$w_type,
-  "score_conf",  "Confiance",       opt$w_conf,
-  "score_spec",  "Spéc. WT",        opt$w_spec,
-  "score_who",   "WHO",             opt$w_who,
-  "score_frame", "Cadre",           opt$w_frame,
-  "score_reads", "Reads",           opt$w_reads,
-  "score_cov",   "Couverture",      opt$w_coverage
+  ~col,          ~label,       ~weight,
+  "score_type",  "Type",       opt$w_type,
+  "score_conf",  "Confiance",  opt$w_conf,
+  "score_spec",  "Spéc. WT",   opt$w_spec,
+  "score_who",   "WHO",        opt$w_who,
+  "score_frame", "Cadre",      opt$w_frame,
+  "score_reads", "Reads",      opt$w_reads
 ) %>% filter(weight > 0)
 dec_df <- fig_df %>% slice_max(score_norm, n = N_TOP, with_ties = FALSE) %>%
   mutate(fusion_ord = reorder(fusion_label, score_norm)) %>%
@@ -413,7 +387,7 @@ ggsave(file.path(DIR_FIG, "score_decomposition.png"), p_dec, width = 11, height 
 
 # 9d. Heatmap présence/absence (top score)
 if (has_pheatmap) {
-  bin <- (mat_chromo >= opt$chromo_min) * 1L
+  bin <- (mat_patho >= opt$patho_min) * 1L
   top_seq <- fig_df %>% slice_max(score_norm, n = 40, with_ties = FALSE) %>% pull(seq_name)
   bin_top <- bin[rownames(bin) %in% top_seq, , drop = FALSE]
   if (nrow(bin_top) > 1) {
@@ -423,7 +397,7 @@ if (has_pheatmap) {
     ar <- fig_df %>% filter(seq_name %in% top_seq) %>%
       mutate(rn = make.unique(fusion_label)) %>%
       transmute(rn, Type = as.character(type_chimerique),
-                Spécificité = specificite, Priorité = as.character(priorite)) %>%
+                Priorité = as.character(priorite)) %>%
       distinct(rn, .keep_all = TRUE) %>% column_to_rownames("rn")
     ar <- ar[rownames(bin_top), , drop = FALSE]
     pheatmap::pheatmap(
@@ -466,9 +440,9 @@ if (has_karyo) {
 cat("\n=== RÉSUMÉ ===\n")
 cat("Fusions totales (pool) :", nrow(annot_out), "\n")
 print(count(annot_out, specificite))
-cat("\nChromo/quasi-spécifiques :", nrow(chromo_spec),
+cat("\nChromo-spécifiques :", nrow(chromo_spec),
     "| matchées Arriba :", sum(chromo_spec$arriba_matched), "\n")
-cat("\nPriorités (chromo/quasi-spécifiques) :\n")
+cat("\nPriorités (chromo-spécifiques) :\n")
 print(count(chromo_spec, priorite))
 cat("\nScore /", MAX_SCORE, "pts | Figures :", DIR_FIG, "| Tables :", DIR_OUT, "\n")
 if (!has_pheatmap) cat("(pheatmap absent → heatmap non générée)\n")
