@@ -103,11 +103,11 @@ MERGE=/chemin/merge-kmer.py
 mkdir -p JB_chromoAML_merge1 JB_wt_merge1
 for fn in rdeer_fullnames/*_on_chromoAML_fullNames.tsv; do
     b=$(basename "$fn"); b=${b#query_result_}; base=${b%%_on_*}
-    "$MERGE" -m 3 -o "JB_chromoAML_merge1/query_${base}_chromoAML_merge1.tsv" "$fn"
+    "$MERGE" -m 1 -o "JB_chromoAML_merge1/query_${base}_chromoAML_merge1.tsv" "$fn"
 done
 for fn in rdeer_fullnames/*_wt_fullNames.tsv; do
     b=$(basename "$fn"); b=${b#query_result_}; base=${b%%_wt_*}
-    "$MERGE" -m 3 -o "JB_wt_merge1/query_${base}_wt_merge1.tsv" "$fn"
+    "$MERGE" -m 1 -o "JB_wt_merge1/query_${base}_wt_merge1.tsv" "$fn"
 done
 ```
 
