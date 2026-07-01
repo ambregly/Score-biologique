@@ -344,33 +344,74 @@ p_bar <- ggplot(bar_df, aes(fusion_ord, max_patho, fill = type_chimerique)) +
   theme(axis.text.y = element_text(size = 7))
 ggsave(file.path(DIR_FIG, "barplot_fusions.png"), p_bar, width = 11, height = 9, dpi = 150)
 
-# 9b. Volcano — score vs fréquence patho
-vol_df <- fig_df %>% mutate(categorie = case_when(
-  is_who_interest    ~ "WHO intérêt",
-  priorite == "P1"   ~ "Chromo-spéc. P1",
-  TRUE               ~ "Chromo-spéc."))
-p_vol <- ggplot(vol_df, aes(score_norm, freq_patho,
-                            shape = type_chimerique, color = categorie)) +
-  geom_vline(xintercept = 0.65, linetype = "dashed",  color = "grey30") +
-  geom_vline(xintercept = 0.40, linetype = "dotted",  color = "grey45") +
-  geom_vline(xintercept = 0.20, linetype = "dotdash", color = "grey60") +
-  geom_point(size = 2.6, alpha = 0.85, stroke = 0.4) +
+# 9b. Volcano — score vs récurrence (zones de priorité, halos, labels)
+CAT_COLORS <- c("WHO intérêt" = "#7b0000", "P1 — Haute" = "#d62728",
+                "P2 — Modérée" = "#ff7f0e", "P3 / NP" = "#9aa0a6")
+vol_df <- fig_df %>% mutate(
+  categorie = factor(case_when(
+    is_who_interest  ~ "WHO intérêt",
+    priorite == "P1" ~ "P1 — Haute",
+    priorite == "P2" ~ "P2 — Modérée",
+    TRUE             ~ "P3 / NP"), levels = names(CAT_COLORS)),
+  pt_size = pmax(sqrt(n_patho_pos) * 1.4, 1.4),
+  a_label = is_who_interest | priorite == "P1")
+y_max <- max(vol_df$freq_patho, na.rm = TRUE)
+
+p_vol <- ggplot(vol_df, aes(score_norm, freq_patho)) +
+  # zones de priorité
+  annotate("rect", xmin = 0.65, xmax = 1.03, ymin = -Inf, ymax = Inf, fill = "#d62728", alpha = 0.04) +
+  annotate("rect", xmin = 0.40, xmax = 0.65, ymin = -Inf, ymax = Inf, fill = "#ff7f0e", alpha = 0.03) +
+  annotate("rect", xmin = 0.20, xmax = 0.40, ymin = -Inf, ymax = Inf, fill = "#9467bd", alpha = 0.02) +
+  annotate("label", x = 0.825, y = y_max * 1.07, label = "P1 ≥ 65%",
+           size = 2.8, color = "#c0392b", fill = "white", label.size = 0.2, fontface = "bold") +
+  annotate("label", x = 0.525, y = y_max * 1.07, label = "P2 40–65%",
+           size = 2.5, color = "#e06000", fill = "white", label.size = 0.2) +
+  annotate("label", x = 0.30,  y = y_max * 1.07, label = "P3 20–40%",
+           size = 2.3, color = "#7a4fa0", fill = "white", label.size = 0.2) +
+  geom_vline(xintercept = 0.65, linetype = "dashed",  color = "grey30", linewidth = 0.4) +
+  geom_vline(xintercept = 0.40, linetype = "dotted",  color = "grey45", linewidth = 0.35) +
+  geom_vline(xintercept = 0.20, linetype = "dotdash", color = "grey60", linewidth = 0.3) +
+  # points non labellisés
+  geom_point(data = vol_df %>% filter(!a_label),
+             aes(size = pt_size, shape = type_chimerique, color = categorie),
+             alpha = 0.55, stroke = 0.2) +
+  # halo blanc + points prioritaires
+  geom_point(data = vol_df %>% filter(a_label),
+             aes(size = pt_size * 1.7), color = "white", show.legend = FALSE) +
+  geom_point(data = vol_df %>% filter(a_label),
+             aes(size = pt_size, shape = type_chimerique, color = categorie),
+             alpha = 0.95, stroke = 0.4) +
+  scale_size_identity() +
   scale_shape_manual(values = TYPE_SHAPES, drop = FALSE, name = "Type chimérique") +
-  scale_color_manual(values = c("WHO intérêt" = "#7b0000",
-                                "Chromo-spéc. P1" = "#d62728",
-                                "Chromo-spéc." = "#2ca02c"), name = "Catégorie") +
-  scale_x_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1)) +
-  scale_y_continuous(labels = percent_format(accuracy = 1)) +
-  labs(title = "Score biologique vs fréquence — fusions chromo-spécifiques",
-       subtitle = paste0("Score / ", MAX_SCORE, " pts  |  seuils P1=65% P2=40% P3=20%"),
-       x = "Score biologique normalisé", y = "Fréquence cohorte patho")
+  scale_color_manual(values = CAT_COLORS, name = "Priorité / WHO", drop = FALSE) +
+  scale_x_continuous(labels = percent_format(accuracy = 1),
+                     limits = c(0, 1.03), breaks = seq(0, 1, 0.1)) +
+  scale_y_continuous(labels = percent_format(accuracy = 1),
+                     limits = c(0, y_max * 1.13), expand = expansion(mult = c(0.01, 0))) +
+  labs(title = "Score biologique vs récurrence — fusions chromo-spécifiques",
+       subtitle = paste0("Taille ∝ √(nb échantillons patho)  |  score / ",
+                         MAX_SCORE, " pts"),
+       x = "Score biologique normalisé", y = "Fréquence cohorte patho") +
+  theme(legend.position = "right", panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "grey93", linewidth = 0.3),
+        plot.title = element_text(face = "bold")) +
+  guides(color = guide_legend(override.aes = list(size = 4, shape = 15)),
+         shape = guide_legend(override.aes = list(size = 3, color = "grey30")))
 if (has_repel)
-  p_vol <- p_vol + ggrepel::geom_text_repel(
-    data = vol_df %>% filter(is_who_interest |
-             score_norm >= sort(score_norm, decreasing = TRUE)[min(15, n())]),
-    aes(label = fusion_label), size = 2.5, color = "grey20",
-    max.overlaps = 20, show.legend = FALSE)
-ggsave(file.path(DIR_FIG, "volcano_fusions.png"), p_vol, width = 11, height = 7, dpi = 150)
+  p_vol <- p_vol +
+    ggrepel::geom_text_repel(
+      data = vol_df %>% filter(is_who_interest),
+      aes(label = fusion_label), fontface = "bold", size = 3, color = "#7b0000",
+      bg.color = "white", bg.r = 0.15, box.padding = 0.6, point.padding = 0.4,
+      min.segment.length = 0, segment.color = "#d62728", segment.linewidth = 0.4,
+      max.overlaps = 30, seed = 42, show.legend = FALSE) +
+    ggrepel::geom_text_repel(
+      data = vol_df %>% filter(!is_who_interest & priorite == "P1"),
+      aes(label = fusion_label), size = 2.6, color = "#1a5c1a",
+      bg.color = "white", bg.r = 0.12, box.padding = 0.5, point.padding = 0.3,
+      min.segment.length = 0, segment.color = "#2ca02c", segment.linewidth = 0.3,
+      max.overlaps = Inf, seed = 43, show.legend = FALSE)
+ggsave(file.path(DIR_FIG, "volcano_fusions.png"), p_vol, width = 12, height = 7.5, dpi = 200)
 
 # 9c. Décomposition du score — seulement les composantes actives (poids > 0)
 comp_def <- tibble::tribble(
