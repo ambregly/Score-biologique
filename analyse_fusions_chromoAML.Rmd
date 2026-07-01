@@ -271,89 +271,77 @@ fig_df <- annot |>
          type_chimerique = factor(type_chimerique, levels = names(TYPE_COLORS)))
 ```
 
+## Classement par score
+
+```{r fig-rank, fig.height=9}
+PRIO_COLORS <- c(P1 = "#d62728", P2 = "#ff7f0e", P3 = "#9467bd", NP = "#bdbdbd")
+fig_df |> slice_max(score_norm, n = params$n_top, with_ties = FALSE) |>
+  mutate(fusion_ord = reorder(fusion_label, score_norm),
+         etiq = paste0(class_ruffle, " · ", reading_frame)) |>
+  ggplot(aes(score_norm, fusion_ord, fill = priorite)) +
+  geom_col(width = 0.75) +
+  geom_vline(xintercept = c(0.65, 0.40, 0.20),
+             linetype = c("dashed", "dotted", "dotdash"), color = "grey50") +
+  geom_text(aes(label = etiq), hjust = -0.05, size = 2.2, color = "grey25") +
+  scale_fill_manual(values = PRIO_COLORS, drop = FALSE, name = "Priorité") +
+  scale_x_continuous(labels = percent_format(accuracy = 1),
+                     limits = c(0, 1.18), breaks = seq(0, 1, 0.2)) +
+  labs(title = paste0("Top ", params$n_top, " fusions par score biologique"),
+       subtitle = paste0("Étiquette = classe Rufflé · cadre  |  score / ", MAX_SCORE, " pts"),
+       x = "Score normalisé", y = NULL) +
+  theme(axis.text.y = element_text(size = 7), panel.grid.minor = element_blank(),
+        plot.title = element_text(face = "bold"))
+```
+
 ## Barplot — expression
 
 ```{r fig-barplot, fig.height=9}
 fig_df |> slice_max(max_patho, n = params$n_top, with_ties = FALSE) |>
   mutate(fusion_ord = reorder(fusion_label, max_patho)) |>
-  ggplot(aes(fusion_ord, max_patho, fill = type_chimerique)) +
+  ggplot(aes(max_patho, fusion_ord, fill = type_chimerique)) +
   geom_col() +
-  geom_text(aes(label = paste0("n=", n_patho_pos)), hjust = -0.1, size = 2.5) +
-  coord_flip() +
   scale_fill_manual(values = TYPE_COLORS, drop = FALSE, name = "Type chimérique") +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
-  labs(title = paste0("Top ", params$n_top, " fusions chromo-spécifiques"),
-       subtitle = "n = nb d'échantillons patho positifs",
-       x = NULL, y = "Comptage k-mer max (patho)") +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(title = paste0("Top ", params$n_top, " fusions chromo-spécifiques — expression max"),
+       x = "Comptage k-mer max chez un individu (patho)", y = NULL) +
   theme(axis.text.y = element_text(size = 7))
 ```
 
-## Volcano — score vs fréquence
+## Charge par échantillon
 
-```{r fig-volcano, fig.height=7.5}
-CAT_COLORS <- c("WHO intérêt" = "#7b0000", "P1 — Haute" = "#d62728",
-                "P2 — Modérée" = "#ff7f0e", "P3 / NP" = "#9aa0a6")
-vol_df <- fig_df |> mutate(
-  categorie = factor(case_when(
-    is_who_interest  ~ "WHO intérêt",
-    priorite == "P1" ~ "P1 — Haute",
-    priorite == "P2" ~ "P2 — Modérée",
-    TRUE             ~ "P3 / NP"), levels = names(CAT_COLORS)),
-  pt_size = pmax(sqrt(n_patho_pos) * 1.4, 1.4),
-  a_label = is_who_interest | priorite == "P1")
-y_max <- max(vol_df$freq_patho, na.rm = TRUE)
+```{r fig-burden, fig.height=7}
+present <- mat_patho[fig_df$seq_name, , drop = FALSE] >= params$patho_min
+ftype   <- setNames(as.character(fig_df$type_chimerique), fig_df$seq_name)
+burden  <- as.data.frame(present) |>
+  rownames_to_column("seq_name") |>
+  pivot_longer(-seq_name, names_to = "sample", values_to = "present") |>
+  filter(present) |>
+  mutate(type = factor(ftype[seq_name], levels = names(TYPE_COLORS))) |>
+  count(sample, type, name = "n")
+tot <- burden |> group_by(sample) |> summarise(t = sum(n), .groups = "drop")
+burden |>
+  mutate(sample = factor(sample, levels = tot$sample[order(tot$t)])) |>
+  ggplot(aes(n, sample, fill = type)) +
+  geom_col() +
+  scale_fill_manual(values = TYPE_COLORS, drop = FALSE, name = "Type chimérique") +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(title = "Charge de fusions chromo-spécifiques par échantillon",
+       subtitle = "Nb de fusions portées par chaque patient, par type",
+       x = "Nombre de fusions", y = NULL) +
+  theme(plot.title = element_text(face = "bold"))
+```
 
-p <- ggplot(vol_df, aes(score_norm, freq_patho)) +
-  annotate("rect", xmin = 0.65, xmax = 1.03, ymin = -Inf, ymax = Inf, fill = "#d62728", alpha = 0.04) +
-  annotate("rect", xmin = 0.40, xmax = 0.65, ymin = -Inf, ymax = Inf, fill = "#ff7f0e", alpha = 0.03) +
-  annotate("rect", xmin = 0.20, xmax = 0.40, ymin = -Inf, ymax = Inf, fill = "#9467bd", alpha = 0.02) +
-  annotate("label", x = 0.825, y = y_max * 1.07, label = "P1 ≥ 65%",
-           size = 2.8, color = "#c0392b", fill = "white", label.size = 0.2, fontface = "bold") +
-  annotate("label", x = 0.525, y = y_max * 1.07, label = "P2 40–65%",
-           size = 2.5, color = "#e06000", fill = "white", label.size = 0.2) +
-  annotate("label", x = 0.30,  y = y_max * 1.07, label = "P3 20–40%",
-           size = 2.3, color = "#7a4fa0", fill = "white", label.size = 0.2) +
-  geom_vline(xintercept = 0.65, linetype = "dashed",  color = "grey30", linewidth = 0.4) +
-  geom_vline(xintercept = 0.40, linetype = "dotted",  color = "grey45", linewidth = 0.35) +
-  geom_vline(xintercept = 0.20, linetype = "dotdash", color = "grey60", linewidth = 0.3) +
-  geom_point(data = vol_df |> filter(!a_label),
-             aes(size = pt_size, shape = type_chimerique, color = categorie),
-             alpha = 0.55, stroke = 0.2) +
-  geom_point(data = vol_df |> filter(a_label),
-             aes(size = pt_size * 1.7), color = "white", show.legend = FALSE) +
-  geom_point(data = vol_df |> filter(a_label),
-             aes(size = pt_size, shape = type_chimerique, color = categorie),
-             alpha = 0.95, stroke = 0.4) +
-  scale_size_identity() +
-  scale_shape_manual(values = TYPE_SHAPES, drop = FALSE, name = "Type chimérique") +
-  scale_color_manual(values = CAT_COLORS, name = "Priorité / WHO", drop = FALSE) +
-  scale_x_continuous(labels = percent_format(accuracy = 1),
-                     limits = c(0, 1.03), breaks = seq(0, 1, 0.1)) +
-  scale_y_continuous(labels = percent_format(accuracy = 1),
-                     limits = c(0, y_max * 1.13), expand = expansion(mult = c(0.01, 0))) +
-  labs(title = "Score biologique vs récurrence — fusions chromo-spécifiques",
-       subtitle = paste0("Taille ∝ √(nb échantillons patho)  |  score / ", MAX_SCORE, " pts"),
-       x = "Score biologique normalisé", y = "Fréquence cohorte patho") +
-  theme(legend.position = "right", panel.grid.minor = element_blank(),
-        panel.grid.major = element_line(color = "grey93", linewidth = 0.3),
-        plot.title = element_text(face = "bold")) +
-  guides(color = guide_legend(override.aes = list(size = 4, shape = 15)),
-         shape = guide_legend(override.aes = list(size = 3, color = "grey30")))
-if (requireNamespace("ggrepel", quietly = TRUE))
-  p <- p +
-    ggrepel::geom_text_repel(
-      data = vol_df |> filter(is_who_interest),
-      aes(label = fusion_label), fontface = "bold", size = 3, color = "#7b0000",
-      bg.color = "white", bg.r = 0.15, box.padding = 0.6, point.padding = 0.4,
-      min.segment.length = 0, segment.color = "#d62728", segment.linewidth = 0.4,
-      max.overlaps = Inf, seed = 42, show.legend = FALSE) +
-    ggrepel::geom_text_repel(
-      data = vol_df |> filter(!is_who_interest & priorite == "P1"),
-      aes(label = fusion_label), size = 2.6, color = "#1a5c1a",
-      bg.color = "white", bg.r = 0.12, box.padding = 0.5, point.padding = 0.3,
-      min.segment.length = 0, segment.color = "#2ca02c", segment.linewidth = 0.3,
-      max.overlaps = Inf, seed = 43, show.legend = FALSE)
-p
+## Répartition des types
+
+```{r fig-types, fig.height=5}
+fig_df |> count(type_chimerique, class_ruffle, name = "n") |>
+  ggplot(aes(n, fct_reorder(type_chimerique, n, sum), fill = class_ruffle)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Set2", name = "Classe Rufflé", na.value = "grey70") +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(title = "Répartition des types chimériques",
+       x = "Nombre de fusions chromo-spécifiques", y = NULL) +
+  theme(plot.title = element_text(face = "bold"))
 ```
 
 ## Décomposition du score

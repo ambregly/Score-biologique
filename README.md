@@ -200,11 +200,13 @@ analyse_fusions/
 ├── fusions_all_specificite_annotees.tsv       # toutes les fusions
 ├── fusions_chromo_specifiques_annotees.tsv     # cible : chromo-spécifiques annotées
 └── figures/
-    ├── barplot_fusions.png
-    ├── volcano_fusions.png
-    ├── score_decomposition.png
-    ├── heatmap_fusions.png        (si pheatmap)
-    └── karyotype_overview.png     (si karyoploteR)
+    ├── score_classement.png        # top fusions par score (noms sur l'axe)
+    ├── barplot_expression.png      # top fusions par expression max
+    ├── charge_par_echantillon.png  # nb de fusions par patient (chromoanagenèse)
+    ├── repartition_types.png       # types chimériques / classes Rufflé
+    ├── score_decomposition.png     # décomposition A..H du score
+    ├── heatmap_fusions.png         (si pheatmap)
+    └── karyotype_overview.png      (si karyoploteR)
 ```
 
 ---
