@@ -11,6 +11,12 @@
 #
 # Usage : Rscript analyse_fusions_chromoAML.R [options]
 #
+# Chemins : par défaut RELATIFS au dossier courant (où tu lances Rscript).
+# Astuce : place-toi dans un dossier de travail et crée des liens symboliques
+#   ln -s /chemin/reel/JB_chromo_wt_merge1 JB_chromo_wt_merge1
+#   ln -s /data/nas/.../starriba           starriba
+# ...ou passe les chemins réels en CLI (--dir-merge, --dir-arriba, --dir-out).
+#
 # Filtres (basés sur le comptage MAX par cohorte ; toujours actifs) :
 #   --wt-min N     fusion retenue si max(WT)    <= N   (défaut 0 : absente des WT)
 #   --patho-min N  fusion retenue si max(patho) >= N   (défaut 5)
@@ -35,9 +41,9 @@ suppressPackageStartupMessages({
 
 # ── CONFIG PAR DÉFAUT ────────────────────────────────────────────────────────
 opt <- list(
-  dir_merge  = "/scratch/ambre/JB_chromo_wt_merge1",
-  dir_arriba = "/data/nas/projects/2025/JB_GAILLARD/analysis/trimmed/starriba",
-  dir_out    = "/scratch/ambre/analyse_fusions",
+  dir_merge  = "JB_chromo_wt_merge1",   # relatif au dossier courant (getwd())
+  dir_arriba = "starriba",              # relatif au dossier courant (getwd())
+  dir_out    = "analyse_fusions",       # relatif au dossier courant (getwd())
   wt_min = 0, patho_min = 5,          # filtres (sur le max par cohorte)
   n_top = 30,                          # figures
   w_type = 4, w_conf = 2, w_spec = 2, w_who = 2, w_frame = 2, w_reads = 2
@@ -87,6 +93,10 @@ dir.create(DIR_FIG, showWarnings = FALSE, recursive = TRUE)
 theme_set(theme_bw(base_size = 12))
 
 cat("=== CONFIGURATION ===\n")
+cat("Dossier courant :", getwd(), "\n")
+cat("  merge  :", normalizePath(opt$dir_merge,  mustWork = FALSE), "\n")
+cat("  arriba :", normalizePath(opt$dir_arriba, mustWork = FALSE), "\n")
+cat("  sortie :", normalizePath(opt$dir_out,    mustWork = FALSE), "\n")
 cat(sprintf("Filtres : max(WT) <= %s  |  max(patho) >= %s\n", opt$wt_min, opt$patho_min))
 cat(sprintf("Poids   : type=%s conf=%s spec=%s who=%s frame=%s reads=%s\n\n",
             opt$w_type, opt$w_conf, opt$w_spec, opt$w_who, opt$w_frame, opt$w_reads))
