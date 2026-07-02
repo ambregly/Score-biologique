@@ -329,15 +329,24 @@ if (length(fasta_files) > 0) {
 kmer_files <- list.files(opt$dir_kmers, pattern = "^kmers\\.fa$",
                          recursive = TRUE, full.names = TRUE)
 if (length(kmer_files) > 0) {
-  kmers_tbl <- map_dfr(kmer_files, read_fasta) %>%
+  kmers_long <- map_dfr(kmer_files, read_fasta) %>%
     filter(seq != "") %>%
     mutate(seq_name = sub("\\.kmer.*$", "", id)) %>%
-    distinct(seq_name, seq) %>%
+    distinct(seq_name, seq) %>%          # dédoublonne les k-mers par fusion
     group_by(seq_name) %>%
-    summarise(n_kmers = n(), kmers = paste(seq, collapse = ";"), .groups = "drop")
-  annot <- annot %>% left_join(kmers_tbl, by = "seq_name")
-  cat(nrow(kmers_tbl), "fusions avec k-mers lues depuis", opt$dir_kmers, "\n")
-} else { annot$n_kmers <- NA_integer_; annot$kmers <- NA_character_
+    mutate(kcol = paste0("kmer", row_number())) %>%
+    ungroup()
+  kmax <- max(as.integer(sub("kmer", "", kmers_long$kcol)))
+  KMER_COLS <- paste0("kmer", seq_len(kmax))   # une colonne par k-mer
+  kmers_wide <- kmers_long %>%
+    pivot_wider(id_cols = seq_name, names_from = kcol, values_from = seq) %>%
+    select(seq_name, all_of(KMER_COLS))
+  n_kmers_tbl <- kmers_long %>% count(seq_name, name = "n_kmers")
+  annot <- annot %>%
+    left_join(n_kmers_tbl, by = "seq_name") %>%
+    left_join(kmers_wide,  by = "seq_name")
+  cat(nrow(n_kmers_tbl), "fusions avec k-mers |", kmax, "k-mers max\n")
+} else { annot$n_kmers <- NA_integer_; KMER_COLS <- character(0)
          warning("Aucun kmers.fa dans ", opt$dir_kmers) }
 
 # ── 8. SORTIES TABLES ────────────────────────────────────────────────────────
@@ -352,7 +361,7 @@ out_cols <- c(
   "split_reads1", "split_reads2", "total_reads", "coverage1", "coverage2",
   "transcript_id1", "transcript_id2", "direction1", "direction2",
   "n_arriba", "samples_arriba",
-  "contig_seq", "n_kmers", "kmers")
+  "contig_seq", "n_kmers", KMER_COLS)
 annot_out <- annot %>% select(any_of(out_cols)) %>% arrange(desc(score_norm))
 
 write_tsv(annot_out, file.path(DIR_OUT, "fusions_all_specificite_annotees.tsv"))

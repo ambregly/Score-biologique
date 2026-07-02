@@ -244,11 +244,17 @@ if (length(ff) > 0) {
 } else annot$contig_seq <- NA_character_
 kf <- list.files(params$dir_kmers, pattern = "^kmers\\.fa$", recursive = TRUE, full.names = TRUE)
 if (length(kf) > 0) {
-  kmers_tbl <- map_dfr(kf, read_fasta) |> filter(seq != "") |>
+  kmers_long <- map_dfr(kf, read_fasta) |> filter(seq != "") |>
     mutate(seq_name = sub("\\.kmer.*$", "", id)) |> distinct(seq_name, seq) |>
-    group_by(seq_name) |> summarise(n_kmers = n(), kmers = paste(seq, collapse = ";"), .groups = "drop")
-  annot <- annot |> left_join(kmers_tbl, by = "seq_name")
-} else { annot$n_kmers <- NA_integer_; annot$kmers <- NA_character_ }
+    group_by(seq_name) |> mutate(kcol = paste0("kmer", row_number())) |> ungroup()
+  KMER_COLS <- paste0("kmer", seq_len(max(as.integer(sub("kmer", "", kmers_long$kcol)))))
+  kmers_wide <- kmers_long |>
+    pivot_wider(id_cols = seq_name, names_from = kcol, values_from = seq) |>
+    select(seq_name, all_of(KMER_COLS))
+  annot <- annot |>
+    left_join(count(kmers_long, seq_name, name = "n_kmers"), by = "seq_name") |>
+    left_join(kmers_wide, by = "seq_name")
+} else { annot$n_kmers <- NA_integer_; KMER_COLS <- character(0) }
 
 chromo_spec <- annot |> filter(specificite == "Chromo-spécifique") |> arrange(desc(score_norm))
 cat("Chromo-spécifiques :", nrow(chromo_spec),

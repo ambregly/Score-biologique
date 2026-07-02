@@ -146,8 +146,8 @@ Le script lit **3 dossiers** et en écrit **1** :
 | Dossier de sortie | `analyse_fusions` | `--dir-out` |
 
 Les tables de sortie incluent, pour chaque fusion : la séquence contig
-(`contig_seq`, 51 nt), le nombre de k-mers (`n_kmers`) et les k-mers associés
-(`kmers`, séparés par `;`), rattachés par `seq_name`.
+(`contig_seq`, 51 nt), le nombre de k-mers (`n_kmers`) et **un k-mer par colonne**
+(`kmer1`, `kmer2`, …), rattachés par `seq_name`.
 
 **Mode A — dossier local + liens symboliques** (les défauts relatifs suffisent) :
 ```bash
