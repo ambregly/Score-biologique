@@ -206,7 +206,9 @@ analyse_fusions/
     ├── repartition_types.png       # types chimériques / classes Rufflé
     ├── score_decomposition.png     # décomposition A..H du score
     ├── heatmap_fusions.png         (si pheatmap)
-    └── karyotype_overview.png      (si karyoploteR)
+    ├── karyotype_overview.png      (si karyoploteR)
+    └── karyotypes/                 # un karyotype par patient (si karyoploteR)
+        └── karyotype_JB_*.png
 ```
 
 ---

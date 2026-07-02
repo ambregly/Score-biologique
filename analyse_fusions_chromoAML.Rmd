@@ -393,6 +393,37 @@ if (requireNamespace("pheatmap", quietly = TRUE)) {
 } else cat("pheatmap non installé.\n")
 ```
 
+## Karyotype — ensemble
+
+```{r fig-karyo, fig.width=10, fig.height=8}
+if (requireNamespace("karyoploteR", quietly = TRUE) &&
+    requireNamespace("GenomicRanges", quietly = TRUE)) {
+  ks_all <- fig_df |> filter(arriba_matched) |>
+    transmute(
+      chr1 = paste0("chr", str_remove(str_split_fixed(bp1, ":", 2)[, 1], "^chr")),
+      pos1 = suppressWarnings(as.numeric(str_split_fixed(bp1, ":", 2)[, 2])),
+      chr2 = paste0("chr", str_remove(str_split_fixed(bp2, ":", 2)[, 1], "^chr")),
+      pos2 = suppressWarnings(as.numeric(str_split_fixed(bp2, ":", 2)[, 2])),
+      type_chimerique = as.character(type_chimerique)) |>
+    filter(!is.na(pos1), !is.na(pos2))
+  if (nrow(ks_all) > 0) {
+    kp <- karyoploteR::plotKaryotype(genome = "hg38",
+            main = "Breakpoints des fusions chromo-spécifiques (Arriba)")
+    for (j in seq_len(nrow(ks_all))) {
+      r <- ks_all[j, ]; col <- TYPE_COLORS[r$type_chimerique]
+      if (is.na(col)) col <- "grey50"
+      try(karyoploteR::kpPlotLinks(kp,
+        data  = GenomicRanges::GRanges(r$chr1, IRanges::IRanges(r$pos1, width = 1)),
+        data2 = GenomicRanges::GRanges(r$chr2, IRanges::IRanges(r$pos2, width = 1)),
+        col = scales::alpha(col, 0.6)), silent = TRUE)
+    }
+  }
+} else cat("karyoploteR non installé — voir les PNG par patient produits par le script .R.\n")
+```
+
+> Les karyotypes **par patient** sont générés par la version `.R`
+> (`figures/karyotypes/karyotype_JB_*.png`).
+
 # Méthodes
 
 - **Spécificité** : fusion retenue (`Chromo-spécifique`) si `max(WT) ≤ `r params$wt_min`` **et** `max(patho) ≥ `r params$patho_min``. Comptages agrégés par MAX par fusion.

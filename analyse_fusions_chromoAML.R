@@ -453,30 +453,50 @@ if (has_pheatmap) {
   }
 }
 
-# 9e. Karyotype d'ensemble (breakpoints des fusions confirmées Arriba)
+# 9e. Karyotypes (breakpoints des fusions confirmées Arriba) — ensemble + par patient
+draw_karyo <- function(ks_df, titre, fichier) {
+  if (nrow(ks_df) == 0) return(invisible())
+  png(fichier, width = 1300, height = 1000, res = 120)
+  kp <- karyoploteR::plotKaryotype(genome = "hg38", main = titre)
+  for (j in seq_len(nrow(ks_df))) {
+    r <- ks_df[j, ]; col <- TYPE_COLORS[r$type_chimerique]
+    if (is.na(col)) col <- "grey50"
+    try(karyoploteR::kpPlotLinks(
+      kp,
+      data  = GenomicRanges::GRanges(r$chr1, IRanges::IRanges(r$pos1, width = 1)),
+      data2 = GenomicRanges::GRanges(r$chr2, IRanges::IRanges(r$pos2, width = 1)),
+      col   = scales::alpha(col, 0.6)), silent = TRUE)
+  }
+  dev.off()
+}
+
 if (has_karyo) {
-  ks <- fig_df %>% filter(arriba_matched) %>%
-    transmute(
+  ks_all <- fig_df %>% filter(arriba_matched) %>%
+    transmute(seq_name,
       chr1 = paste0("chr", str_remove(str_split_fixed(bp1, ":", 2)[, 1], "^chr")),
       pos1 = suppressWarnings(as.numeric(str_split_fixed(bp1, ":", 2)[, 2])),
       chr2 = paste0("chr", str_remove(str_split_fixed(bp2, ":", 2)[, 1], "^chr")),
       pos2 = suppressWarnings(as.numeric(str_split_fixed(bp2, ":", 2)[, 2])),
       type_chimerique = as.character(type_chimerique)) %>%
     filter(!is.na(pos1), !is.na(pos2))
-  if (nrow(ks) > 0) {
-    png(file.path(DIR_FIG, "karyotype_overview.png"), width = 1300, height = 1000, res = 120)
-    kp <- karyoploteR::plotKaryotype(genome = "hg38",
-            main = "Breakpoints des fusions chromo-spécifiques (Arriba)")
-    for (j in seq_len(nrow(ks))) {
-      r <- ks[j, ]; col <- TYPE_COLORS[r$type_chimerique]
-      if (is.na(col)) col <- "grey50"
-      try(karyoploteR::kpPlotLinks(
-        kp,
-        data  = GenomicRanges::GRanges(r$chr1, IRanges::IRanges(r$pos1, width = 1)),
-        data2 = GenomicRanges::GRanges(r$chr2, IRanges::IRanges(r$pos2, width = 1)),
-        col   = scales::alpha(col, 0.55)), silent = TRUE)
+
+  # Vue d'ensemble (toutes cohortes confondues)
+  draw_karyo(ks_all, "Breakpoints des fusions chromo-spécifiques (toutes)",
+             file.path(DIR_FIG, "karyotype_overview.png"))
+
+  # Un karyotype par patient : fusions présentes chez cet échantillon
+  dir_kar <- file.path(DIR_FIG, "karyotypes")
+  dir.create(dir_kar, showWarnings = FALSE, recursive = TRUE)
+  if (nrow(ks_all) > 0) {
+    present_k <- mat_patho[ks_all$seq_name, , drop = FALSE] >= opt$patho_min
+    for (s in colnames(present_k)) {
+      seqs  <- rownames(present_k)[present_k[, s]]
+      ks_s  <- ks_all %>% filter(seq_name %in% seqs)
+      if (nrow(ks_s) == 0) next
+      draw_karyo(ks_s, paste0(s, " — ", nrow(ks_s), " fusion(s) chromo-spé."),
+                 file.path(dir_kar, paste0("karyotype_", s, ".png")))
     }
-    dev.off()
+    cat("Karyotypes par patient écrits dans :", dir_kar, "\n")
   }
 }
 
