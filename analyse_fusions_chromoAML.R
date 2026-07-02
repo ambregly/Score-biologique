@@ -331,13 +331,14 @@ kmer_files <- list.files(opt$dir_kmers, pattern = "^kmers\\.fa$",
 if (length(kmer_files) > 0) {
   kmers_long <- map_dfr(kmer_files, read_fasta) %>%
     filter(seq != "") %>%
-    mutate(seq_name = sub("\\.kmer.*$", "", id)) %>%
-    distinct(seq_name, seq) %>%          # dédoublonne les k-mers par fusion
-    group_by(seq_name) %>%
-    mutate(kcol = paste0("kmer", row_number())) %>%
-    ungroup()
-  kmax <- max(as.integer(sub("kmer", "", kmers_long$kcol)))
-  KMER_COLS <- paste0("kmer", seq_len(kmax))   # une colonne par k-mer
+    mutate(seq_name = sub("\\.kmer.*$", "", id),
+           kidx = as.integer(str_match(id, "\\.kmer([0-9]+)")[, 2])) %>%
+    filter(!is.na(kidx)) %>%
+    arrange(seq_name, kidx) %>%
+    distinct(seq_name, kidx, .keep_all = TRUE) %>%  # un seul k-mer par position
+    mutate(kcol = paste0("kmer", kidx))
+  kmax <- max(kmers_long$kidx)
+  KMER_COLS <- paste0("kmer", seq_len(kmax))   # une colonne par position (≤ 21)
   kmers_wide <- kmers_long %>%
     pivot_wider(id_cols = seq_name, names_from = kcol, values_from = seq) %>%
     select(seq_name, all_of(KMER_COLS))
