@@ -324,31 +324,37 @@ kmer_files  <- list.files(opt$dir_kmers, pattern = "^kmers\\.fa$",
                           recursive = TRUE, full.names = TRUE)
 
 # Contigs par (échantillon, seq_name)
-contigs_s <- if (length(fasta_files) > 0)
-  map_dfr(fasta_files, ~ read_fasta(.x) %>%
-            mutate(sample = str_extract(basename(.x), "JB_[0-9]+"))) %>%
+if (length(fasta_files) > 0) {
+  contigs_s <- map_dfr(fasta_files, ~ read_fasta(.x) %>%
+                         mutate(sample = str_extract(basename(.x), "JB_[0-9]+"))) %>%
     filter(seq != "") %>% transmute(sample, seq_name = id, contig_seq = seq)
-else tibble(sample = character(), seq_name = character(), contig_seq = character())
+} else {
+  contigs_s <- tibble(sample = character(), seq_name = character(), contig_seq = character())
+}
 
 # K-mers par (échantillon, seq_name), une colonne par position
-kmers_s <- if (length(kmer_files) > 0)
-  map_dfr(kmer_files, ~ read_fasta(.x) %>%
-            mutate(sample = str_extract(.x, "JB_[0-9]+"))) %>%
+if (length(kmer_files) > 0) {
+  kmers_s <- map_dfr(kmer_files, ~ read_fasta(.x) %>%
+                       mutate(sample = str_extract(.x, "JB_[0-9]+"))) %>%
     filter(seq != "") %>%
     mutate(seq_name = sub("\\.kmer.*$", "", id),
            kidx = as.integer(str_match(id, "\\.kmer([0-9]+)")[, 2])) %>%
     filter(!is.na(kidx))
-else tibble(sample = character(), seq_name = character(), kidx = integer(), seq = character())
+} else {
+  kmers_s <- tibble(sample = character(), seq_name = character(),
+                    kidx = integer(), seq = character())
+}
 
 KMER_COLS <- if (nrow(kmers_s) > 0) paste0("kmer", seq_len(max(kmers_s$kidx))) else character(0)
-kmers_sw <- if (nrow(kmers_s) > 0)
-  kmers_s %>% distinct(sample, seq_name, kidx, .keep_all = TRUE) %>%
+if (nrow(kmers_s) > 0) {
+  kmers_sw <- kmers_s %>% distinct(sample, seq_name, kidx, .keep_all = TRUE) %>%
     mutate(kcol = paste0("kmer", kidx)) %>%
     pivot_wider(id_cols = c(sample, seq_name), names_from = kcol, values_from = seq)
-else tibble(sample = character(), seq_name = character())
-nk <- if (nrow(kmers_s) > 0)
-  kmers_s %>% distinct(sample, seq_name, kidx) %>% count(sample, seq_name, name = "n_kmers")
-else tibble(sample = character(), seq_name = character(), n_kmers = integer())
+  nk <- kmers_s %>% distinct(sample, seq_name, kidx) %>% count(sample, seq_name, name = "n_kmers")
+} else {
+  kmers_sw <- tibble(sample = character(), seq_name = character())
+  nk <- tibble(sample = character(), seq_name = character(), n_kmers = integer())
+}
 
 # Une entrée par contig distinct ; suffixe .2, .3 pour les variantes d'un seq_name
 variants <- contigs_s %>%
