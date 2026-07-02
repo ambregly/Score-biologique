@@ -48,7 +48,6 @@ opt <- list(
   n_top = 30,                          # figures
   w_type = 4, w_conf = 2, w_spec = 2, w_who = 2, w_frame = 2, w_reads = 2
 )
-READTHROUGH_DIST <- 300000   # seuil read-through (Rufflé 2024) en pb
 
 # ── PARSER CLI ───────────────────────────────────────────────────────────────
 alias <- c(type = "w_type", conf = "w_conf", confidence = "w_conf",
@@ -113,20 +112,36 @@ GENE_ALIASES <- c(
 )
 resolve_alias <- function(g) ifelse(g %in% names(GENE_ALIASES), GENE_ALIASES[g], g)
 
+# ── Type & classe à partir du type Arriba détaillé ───────────────────────────
+# arriba_type ex : "translocation", "deletion/read-through", "duplication/ITD"...
+# On prend le token de base (avant "/") ; read-through détecté à part.
+arriba_base <- function(t) {
+  tl <- str_to_lower(coalesce(t, ""))
+  b  <- str_split_fixed(tl, "/", 2)[, 1]
+  dplyr::case_when(
+    str_detect(tl, "read-through") ~ "Read-through",
+    b == "translocation"           ~ "Translocation",
+    b == "inversion"               ~ "Inversion",
+    b == "duplication"             ~ "Duplication",
+    b == "deletion"                ~ "Délétion",
+    is.na(t) | t == ""             ~ "Non confirmé Arriba",
+    TRUE                           ~ "Autre")
+}
+ruffle_class <- function(t) {
+  b <- str_split_fixed(str_to_lower(coalesce(t, "")), "/", 2)[, 1]
+  dplyr::case_when(
+    b == "translocation" ~ "Class 1",
+    b == "inversion"     ~ "Class 4",
+    b == "duplication"   ~ "Class 3",
+    b == "deletion"      ~ "Class 2",
+    TRUE                 ~ NA_character_)
+}
+
 # ── Constantes visuelles ─────────────────────────────────────────────────────
 TYPE_COLORS <- c(
   Translocation = "#d62728", Inversion = "#9467bd", "Délétion" = "#ff7f0e",
   Duplication = "#1f77b4", "Read-through" = "#2ca02c",
-  "Non confirmé Arriba" = "grey65", Inconnu = "grey50"
-)
-TYPE_SHAPES <- c(
-  Translocation = 16, Inversion = 17, Duplication = 15, "Délétion" = 18,
-  "Read-through" = 25, "Non confirmé Arriba" = 4, Inconnu = 3
-)
-TYPE_CLASS <- c(
-  Translocation = "Class 1", Inversion = "Class 4", Duplication = "Class 3",
-  "Délétion" = "Class 2", "Read-through" = "Class 2",
-  "Non confirmé Arriba" = "NA", Inconnu = "NA"
+  "Non confirmé Arriba" = "grey65", Autre = "grey50"
 )
 
 # ── 1. CHARGEMENT DES COMPTAGES MERGÉS ───────────────────────────────────────
@@ -203,12 +218,6 @@ arriba <- map_dfr(arriba_files, function(f) {
 }) %>%
   rename(gene1 = `#gene1`) %>%
   mutate(
-    chr1 = str_remove(str_split_fixed(breakpoint1, ":", 2)[, 1], "^chr"),
-    pos1 = suppressWarnings(as.numeric(str_split_fixed(breakpoint1, ":", 2)[, 2])),
-    chr2 = str_remove(str_split_fixed(breakpoint2, ":", 2)[, 1], "^chr"),
-    pos2 = suppressWarnings(as.numeric(str_split_fixed(breakpoint2, ":", 2)[, 2])),
-    strand1_gene = str_split_fixed(`strand1(gene/fusion)`, "/", 2)[, 1],
-    strand2_gene = str_split_fixed(`strand2(gene/fusion)`, "/", 2)[, 1],
     gkey = map2_chr(resolve_alias(gene1), resolve_alias(gene2),
                     ~ paste(sort(c(.x, .y)), collapse = "|")),
     total_reads = suppressWarnings(as.numeric(split_reads1) + as.numeric(split_reads2)),
@@ -216,26 +225,16 @@ arriba <- map_dfr(arriba_files, function(f) {
       str_detect(confidence, regex("high",   ignore_case = TRUE)) ~ 3L,
       str_detect(confidence, regex("medium", ignore_case = TRUE)) ~ 2L,
       str_detect(confidence, regex("low",    ignore_case = TRUE)) ~ 1L,
-      TRUE ~ 0L),
-    type_chimerique = case_when(
-      chr1 != chr2 ~ "Translocation",
-      chr1 == chr2 & strand1_gene != strand2_gene ~ "Inversion",
-      chr1 == chr2 & strand1_gene == strand2_gene & pos1 > pos2 ~ "Duplication",
-      chr1 == chr2 & strand1_gene == strand2_gene &
-        (pos2 - pos1) < READTHROUGH_DIST ~ "Read-through",
-      chr1 == chr2 & strand1_gene == strand2_gene &
-        (pos2 - pos1) >= READTHROUGH_DIST ~ "Délétion",
-      TRUE ~ "Inconnu"))
+      TRUE ~ 0L))
 
+# Résumé Arriba : une ligne par paire de gènes, on garde le meilleur record.
+# On n'affiche PAS les gènes/breakpoints d'Arriba : on garde ceux du seq_name.
 arriba_sum <- arriba %>%
   arrange(desc(conf_num)) %>%
   group_by(gkey) %>%
   summarise(
-    a_gene1 = first(gene1), a_gene2 = first(gene2),
-    a_breakpoint1 = first(breakpoint1), a_breakpoint2 = first(breakpoint2),
     site1 = first(site1), site2 = first(site2),
     arriba_type = first(type), confidence = first(confidence),
-    type_chimerique = first(type_chimerique),
     reading_frame = case_when(
       any(reading_frame == "in-frame",     na.rm = TRUE) ~ "in-frame",
       any(reading_frame == "out-of-frame", na.rm = TRUE) ~ "out-of-frame",
@@ -243,21 +242,20 @@ arriba_sum <- arriba %>%
     split_reads1 = first(split_reads1), split_reads2 = first(split_reads2),
     total_reads  = suppressWarnings(max(total_reads, na.rm = TRUE)),
     coverage1 = first(coverage1), coverage2 = first(coverage2),
-    retained_protein_domains = first(retained_protein_domains),
     transcript_id1 = first(transcript_id1), transcript_id2 = first(transcript_id2),
     direction1 = first(direction1), direction2 = first(direction2),
-    tags = first(tags),
     n_arriba = n_distinct(sample),
     samples_arriba = paste(sort(unique(sample)), collapse = ", "),
     .groups = "drop") %>%
-  mutate(total_reads = ifelse(is.finite(total_reads), total_reads, NA_real_),
-         class_ruffle = unname(TYPE_CLASS[type_chimerique]))
+  mutate(total_reads = ifelse(is.finite(total_reads), total_reads, NA_real_))
 
 # ── 6. JOINTURE (sur la paire de gènes) ──────────────────────────────────────
+# type_base (couleurs) et class_ruffle dérivés du type Arriba détaillé.
 annot <- parsed %>%
   left_join(arriba_sum, by = "gkey") %>%
   mutate(arriba_matched = !is.na(confidence),
-         type_chimerique = replace_na(type_chimerique, "Non confirmé Arriba"),
+         type_base    = arriba_base(arriba_type),
+         class_ruffle = ruffle_class(arriba_type),
          is_who_interest = paste(g1n, g2n, sep = "--") %in% WHO_FUSIONS_INTEREST |
                            paste(g2n, g1n, sep = "--") %in% WHO_FUSIONS_INTEREST,
          is_who_interest = replace_na(is_who_interest, FALSE))
@@ -270,9 +268,9 @@ if (MAX_SCORE <= 0) stop("Tous les poids sont nuls : score impossible.")
 annot <- annot %>%
   mutate(
     frac_type = case_when(
-      type_chimerique %in% c("Translocation", "Inversion") ~ 1.0,
-      type_chimerique %in% c("Délétion", "Duplication")    ~ 0.5,
-      type_chimerique == "Read-through"                    ~ 0.25,
+      type_base %in% c("Translocation", "Inversion") ~ 1.0,
+      type_base %in% c("Délétion", "Duplication")    ~ 0.5,
+      type_base == "Read-through"                    ~ 0.25,
       TRUE ~ 0),
     frac_conf = case_when(
       str_detect(coalesce(confidence, ""), regex("high",   ignore_case = TRUE)) ~ 1.0,
@@ -305,12 +303,11 @@ out_cols <- c(
   "score_type", "score_conf", "score_spec", "score_who", "score_frame", "score_reads",
   "n_patho_pos", "freq_patho", "n_wt_pos", "freq_wt", "max_patho", "max_wt",
   "samples_patho", "n_fichiers",
-  "arriba_matched", "type_chimerique", "class_ruffle", "reading_frame",
-  "confidence", "arriba_type", "site1", "site2",
+  "arriba_matched", "arriba_type", "class_ruffle", "reading_frame",
+  "confidence", "site1", "site2",
   "split_reads1", "split_reads2", "total_reads", "coverage1", "coverage2",
-  "retained_protein_domains", "transcript_id1", "transcript_id2",
-  "direction1", "direction2", "tags",
-  "a_gene1", "a_gene2", "a_breakpoint1", "a_breakpoint2", "n_arriba", "samples_arriba")
+  "transcript_id1", "transcript_id2", "direction1", "direction2",
+  "n_arriba", "samples_arriba")
 annot_out <- annot %>% select(any_of(out_cols)) %>% arrange(desc(score_norm))
 
 write_tsv(annot_out, file.path(DIR_OUT, "fusions_all_specificite_annotees.tsv"))
@@ -327,7 +324,7 @@ N_TOP <- opt$n_top
 fig_df <- annot %>%
   filter(specificite == "Chromo-spécifique") %>%
   mutate(fusion_label = paste(gene1, gene2, sep = "--"),
-         type_chimerique = factor(type_chimerique, levels = names(TYPE_COLORS)))
+         type_base = factor(type_base, levels = names(TYPE_COLORS)))
 
 # Palette priorités (partagée)
 PRIO_COLORS <- c(P1 = "#d62728", P2 = "#ff7f0e", P3 = "#9467bd", NP = "#bdbdbd")
@@ -335,9 +332,9 @@ PRIO_COLORS <- c(P1 = "#d62728", P2 = "#ff7f0e", P3 = "#9467bd", NP = "#bdbdbd")
 # 9a. Barplot — top N par expression max (noms sur l'axe Y, toujours visibles)
 p_bar <- fig_df %>% slice_max(max_patho, n = N_TOP, with_ties = FALSE) %>%
   mutate(fusion_ord = reorder(fusion_label, max_patho)) %>%
-  ggplot(aes(max_patho, fusion_ord, fill = type_chimerique)) +
+  ggplot(aes(max_patho, fusion_ord, fill = type_base)) +
   geom_col() +
-  scale_fill_manual(values = TYPE_COLORS, drop = FALSE, name = "Type chimérique") +
+  scale_fill_manual(values = TYPE_COLORS, drop = FALSE, name = "Type (Arriba)") +
   scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
   labs(title = paste0("Top ", N_TOP, " fusions chromo-spécifiques — expression max"),
        x = "Comptage k-mer max chez un individu (patho)", y = NULL) +
@@ -347,7 +344,7 @@ ggsave(file.path(DIR_FIG, "barplot_expression.png"), p_bar, width = 11, height =
 # 9b. Classement par score biologique (noms sur l'axe Y = toujours visibles)
 p_rank <- fig_df %>% slice_max(score_norm, n = N_TOP, with_ties = FALSE) %>%
   mutate(fusion_ord = reorder(fusion_label, score_norm),
-         etiq = paste0(class_ruffle, " · ", reading_frame)) %>%
+         etiq = paste0(coalesce(class_ruffle, "—"), " · ", coalesce(reading_frame, "—"))) %>%
   ggplot(aes(score_norm, fusion_ord, fill = priorite)) +
   geom_col(width = 0.75) +
   geom_vline(xintercept = 0.65, linetype = "dashed",  color = "grey40", linewidth = 0.3) +
@@ -367,13 +364,13 @@ ggsave(file.path(DIR_FIG, "score_classement.png"), p_rank, width = 12, height = 
 # 9c. Charge de fusions par échantillon (signature chromoanagenèse)
 # On ne compte que les fusions au type confirmé par Arriba ;
 # les non confirmées / inconnues sont signalées en sous-titre.
-fig_conf   <- fig_df %>% filter(!type_chimerique %in% c("Non confirmé Arriba", "Inconnu"))
+fig_conf   <- fig_df %>% filter(!type_base %in% c("Non confirmé Arriba", "Autre"))
 n_non_conf <- nrow(fig_df) - nrow(fig_conf)
-sub_burden <- paste0("Nb de fusions portées par chaque patient, par type chimérique",
+sub_burden <- paste0("Nb de fusions portées par chaque patient, par type (Arriba)",
   if (n_non_conf > 0) paste0("  |  ", n_non_conf,
       " fusion(s) chromo-spé. non retrouvée(s) dans Arriba (exclues)") else "")
 present <- mat_patho[fig_conf$seq_name, , drop = FALSE] >= opt$patho_min
-ftype   <- setNames(as.character(fig_conf$type_chimerique), fig_conf$seq_name)
+ftype   <- setNames(as.character(fig_conf$type_base), fig_conf$seq_name)
 burden  <- as.data.frame(present) %>%
   rownames_to_column("seq_name") %>%
   pivot_longer(-seq_name, names_to = "sample", values_to = "present") %>%
@@ -386,7 +383,7 @@ if (nrow(burden) > 0) {
     mutate(sample = factor(sample, levels = tot$sample[order(tot$t)])) %>%
     ggplot(aes(n, sample, fill = type)) +
     geom_col() +
-    scale_fill_manual(values = TYPE_COLORS, drop = TRUE, name = "Type chimérique") +
+    scale_fill_manual(values = TYPE_COLORS, drop = TRUE, name = "Type (Arriba)") +
     scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
     labs(title = "Charge de fusions chromo-spécifiques par échantillon",
          subtitle = sub_burden, x = "Nombre de fusions", y = NULL) +
@@ -396,8 +393,8 @@ if (nrow(burden) > 0) {
 }
 
 # 9d. Répartition des types chimériques / classes Rufflé
-p_type <- fig_df %>% count(type_chimerique, class_ruffle, name = "n") %>%
-  ggplot(aes(n, fct_reorder(type_chimerique, n, sum), fill = class_ruffle)) +
+p_type <- fig_df %>% count(type_base, class_ruffle, name = "n") %>%
+  ggplot(aes(n, fct_reorder(type_base, n, sum), fill = class_ruffle)) +
   geom_col() +
   scale_fill_brewer(palette = "Set2", name = "Classe Rufflé", na.value = "grey70") +
   scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
@@ -440,7 +437,7 @@ if (has_pheatmap) {
     bin_top <- bin_top[rowSums(bin_top) > 0, , drop = FALSE]
     ar <- fig_df %>% filter(seq_name %in% top_seq) %>%
       mutate(rn = make.unique(fusion_label)) %>%
-      transmute(rn, Type = as.character(type_chimerique),
+      transmute(rn, Type = as.character(type_base),
                 Priorité = as.character(priorite)) %>%
       distinct(rn, .keep_all = TRUE) %>% column_to_rownames("rn")
     ar <- ar[rownames(bin_top), , drop = FALSE]
@@ -459,7 +456,7 @@ draw_karyo <- function(ks_df, titre, fichier) {
   png(fichier, width = 1300, height = 1000, res = 120)
   kp <- karyoploteR::plotKaryotype(genome = "hg38", main = titre)
   for (j in seq_len(nrow(ks_df))) {
-    r <- ks_df[j, ]; col <- TYPE_COLORS[r$type_chimerique]
+    r <- ks_df[j, ]; col <- TYPE_COLORS[r$type_base]
     if (is.na(col)) col <- "grey50"
     try(karyoploteR::kpPlotLinks(
       kp,
@@ -477,7 +474,7 @@ if (has_karyo) {
       pos1 = suppressWarnings(as.numeric(str_split_fixed(bp1, ":", 2)[, 2])),
       chr2 = paste0("chr", str_remove(str_split_fixed(bp2, ":", 2)[, 1], "^chr")),
       pos2 = suppressWarnings(as.numeric(str_split_fixed(bp2, ":", 2)[, 2])),
-      type_chimerique = as.character(type_chimerique)) %>%
+      type_base = as.character(type_base)) %>%
     filter(!is.na(pos1), !is.na(pos2))
 
   # Vue d'ensemble (toutes cohortes confondues)
