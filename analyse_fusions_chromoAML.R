@@ -365,8 +365,15 @@ p_rank <- fig_df %>% slice_max(score_norm, n = N_TOP, with_ties = FALSE) %>%
 ggsave(file.path(DIR_FIG, "score_classement.png"), p_rank, width = 12, height = 9, dpi = 200)
 
 # 9c. Charge de fusions par échantillon (signature chromoanagenèse)
-present <- mat_patho[fig_df$seq_name, , drop = FALSE] >= opt$patho_min
-ftype   <- setNames(as.character(fig_df$type_chimerique), fig_df$seq_name)
+# On ne compte que les fusions au type confirmé par Arriba ;
+# les non confirmées / inconnues sont signalées en sous-titre.
+fig_conf   <- fig_df %>% filter(!type_chimerique %in% c("Non confirmé Arriba", "Inconnu"))
+n_non_conf <- nrow(fig_df) - nrow(fig_conf)
+sub_burden <- paste0("Nb de fusions portées par chaque patient, par type chimérique",
+  if (n_non_conf > 0) paste0("  |  ", n_non_conf,
+      " fusion(s) chromo-spé. non retrouvée(s) dans Arriba (exclues)") else "")
+present <- mat_patho[fig_conf$seq_name, , drop = FALSE] >= opt$patho_min
+ftype   <- setNames(as.character(fig_conf$type_chimerique), fig_conf$seq_name)
 burden  <- as.data.frame(present) %>%
   rownames_to_column("seq_name") %>%
   pivot_longer(-seq_name, names_to = "sample", values_to = "present") %>%
@@ -379,11 +386,10 @@ if (nrow(burden) > 0) {
     mutate(sample = factor(sample, levels = tot$sample[order(tot$t)])) %>%
     ggplot(aes(n, sample, fill = type)) +
     geom_col() +
-    scale_fill_manual(values = TYPE_COLORS, drop = FALSE, name = "Type chimérique") +
+    scale_fill_manual(values = TYPE_COLORS, drop = TRUE, name = "Type chimérique") +
     scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
     labs(title = "Charge de fusions chromo-spécifiques par échantillon",
-         subtitle = "Nb de fusions portées par chaque patient, par type chimérique",
-         x = "Nombre de fusions", y = NULL) +
+         subtitle = sub_burden, x = "Nombre de fusions", y = NULL) +
     theme(plot.title = element_text(face = "bold"))
   ggsave(file.path(DIR_FIG, "charge_par_echantillon.png"), p_burden,
          width = 10, height = 7, dpi = 150)
