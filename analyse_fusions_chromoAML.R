@@ -43,6 +43,8 @@ suppressPackageStartupMessages({
 opt <- list(
   dir_merge  = "JB_chromo_wt_merge1",   # relatif au dossier courant (getwd())
   dir_arriba = "starriba",              # relatif au dossier courant (getwd())
+  dir_fasta  = "fasta_JB",              # contigs de départ JB_*.fasta
+  dir_kmers  = "JB_kmers",              # dossiers JB_*_kmers/kmers.fa
   dir_out    = "analyse_fusions",       # relatif au dossier courant (getwd())
   wt_min = 0, patho_min = 5,          # filtres (sur le max par cohorte)
   n_top = 30,                          # figures
@@ -53,7 +55,7 @@ opt <- list(
 alias <- c(type = "w_type", conf = "w_conf", confidence = "w_conf",
            spec = "w_spec", specificity = "w_spec", who = "w_who",
            frame = "w_frame", reads = "w_reads")
-string_opts <- c("dir_merge", "dir_arriba", "dir_out")
+string_opts <- c("dir_merge", "dir_arriba", "dir_fasta", "dir_kmers", "dir_out")
 
 args <- commandArgs(trailingOnly = TRUE)
 if ("--help" %in% args || "-h" %in% args) {
@@ -95,6 +97,8 @@ cat("=== CONFIGURATION ===\n")
 cat("Dossier courant :", getwd(), "\n")
 cat("  merge  :", normalizePath(opt$dir_merge,  mustWork = FALSE), "\n")
 cat("  arriba :", normalizePath(opt$dir_arriba, mustWork = FALSE), "\n")
+cat("  fasta  :", normalizePath(opt$dir_fasta,  mustWork = FALSE), "\n")
+cat("  kmers  :", normalizePath(opt$dir_kmers,  mustWork = FALSE), "\n")
 cat("  sortie :", normalizePath(opt$dir_out,    mustWork = FALSE), "\n")
 cat(sprintf("Filtres : max(WT) <= %s  |  max(patho) >= %s\n", opt$wt_min, opt$patho_min))
 cat(sprintf("Poids   : type=%s conf=%s spec=%s who=%s frame=%s reads=%s\n\n",
@@ -111,6 +115,20 @@ GENE_ALIASES <- c(
   ETO = "RUNX1T1", MTG8 = "RUNX1T1", CBFA2T1 = "RUNX1T1", BCR1 = "BCR"
 )
 resolve_alias <- function(g) ifelse(g %in% names(GENE_ALIASES), GENE_ALIASES[g], g)
+
+# ── Lecture FASTA simple : renvoie tibble(id, seq) ───────────────────────────
+read_fasta <- function(path) {
+  ln <- readLines(path, warn = FALSE)
+  ln <- ln[!grepl("^\\s*$", ln)]
+  if (length(ln) == 0) return(tibble(id = character(), seq = character()))
+  is_h <- startsWith(ln, ">")
+  grp  <- cumsum(is_h)
+  ids  <- sub("^>", "", ln[is_h])
+  seqs_by_grp <- tapply(ln[!is_h], grp[!is_h], paste0, collapse = "")
+  seq_vec <- rep("", length(ids))
+  seq_vec[as.integer(names(seqs_by_grp))] <- as.character(seqs_by_grp)
+  tibble(id = ids, seq = seq_vec)
+}
 
 # ── Type & classe à partir du type Arriba détaillé ───────────────────────────
 # arriba_type ex : "translocation", "deletion/read-through", "duplication/ITD"...
@@ -296,6 +314,32 @@ annot <- annot %>%
       score_norm >= 0.20 ~ "P3", TRUE ~ "NP"), levels = c("P1", "P2", "P3", "NP"))
   )
 
+# ── 7b. CONTIGS (JB_*.fasta) & K-MERS (JB_*_kmers/kmers.fa) ───────────────────
+# Le header du contig = seq_name ; les headers k-mers = "<seq_name>.kmerN".
+fasta_files <- list.files(opt$dir_fasta, pattern = "^JB_.*\\.fasta$", full.names = TRUE)
+if (length(fasta_files) > 0) {
+  contigs <- map_dfr(fasta_files, read_fasta) %>%
+    filter(seq != "") %>%
+    distinct(id, .keep_all = TRUE) %>%
+    transmute(seq_name = id, contig_seq = seq)
+  annot <- annot %>% left_join(contigs, by = "seq_name")
+  cat(nrow(contigs), "contigs lus depuis", opt$dir_fasta, "\n")
+} else { annot$contig_seq <- NA_character_; warning("Aucun JB_*.fasta dans ", opt$dir_fasta) }
+
+kmer_files <- list.files(opt$dir_kmers, pattern = "^kmers\\.fa$",
+                         recursive = TRUE, full.names = TRUE)
+if (length(kmer_files) > 0) {
+  kmers_tbl <- map_dfr(kmer_files, read_fasta) %>%
+    filter(seq != "") %>%
+    mutate(seq_name = sub("\\.kmer.*$", "", id)) %>%
+    distinct(seq_name, seq) %>%
+    group_by(seq_name) %>%
+    summarise(n_kmers = n(), kmers = paste(seq, collapse = ";"), .groups = "drop")
+  annot <- annot %>% left_join(kmers_tbl, by = "seq_name")
+  cat(nrow(kmers_tbl), "fusions avec k-mers lues depuis", opt$dir_kmers, "\n")
+} else { annot$n_kmers <- NA_integer_; annot$kmers <- NA_character_
+         warning("Aucun kmers.fa dans ", opt$dir_kmers) }
+
 # ── 8. SORTIES TABLES ────────────────────────────────────────────────────────
 out_cols <- c(
   "seq_name", "gene1", "bp1", "gene2", "bp2", "specificite", "is_who_interest",
@@ -307,7 +351,8 @@ out_cols <- c(
   "confidence", "site1", "site2",
   "split_reads1", "split_reads2", "total_reads", "coverage1", "coverage2",
   "transcript_id1", "transcript_id2", "direction1", "direction2",
-  "n_arriba", "samples_arriba")
+  "n_arriba", "samples_arriba",
+  "contig_seq", "n_kmers", "kmers")
 annot_out <- annot %>% select(any_of(out_cols)) %>% arrange(desc(score_norm))
 
 write_tsv(annot_out, file.path(DIR_OUT, "fusions_all_specificite_annotees.tsv"))

@@ -6,6 +6,8 @@ date: "`r format(Sys.Date(), '%d %B %Y')`"
 params:
   dir_merge:  "JB_chromo_wt_merge1"
   dir_arriba: "starriba"
+  dir_fasta:  "fasta_JB"
+  dir_kmers:  "JB_kmers"
   wt_min:     0
   patho_min:  5
   n_top:      30
@@ -53,6 +55,15 @@ GENE_ALIASES <- c(
   AF9 = "MLLT3", LTG9 = "MLLT3", AF6 = "MLLT4", AFDN = "MLLT4", ENL = "MLLT1",
   ETO = "RUNX1T1", MTG8 = "RUNX1T1", CBFA2T1 = "RUNX1T1", BCR1 = "BCR")
 resolve_alias <- function(g) ifelse(g %in% names(GENE_ALIASES), GENE_ALIASES[g], g)
+
+read_fasta <- function(path) {
+  ln <- readLines(path, warn = FALSE); ln <- ln[!grepl("^\\s*$", ln)]
+  if (length(ln) == 0) return(tibble(id = character(), seq = character()))
+  is_h <- startsWith(ln, ">"); grp <- cumsum(is_h); ids <- sub("^>", "", ln[is_h])
+  sbg <- tapply(ln[!is_h], grp[!is_h], paste0, collapse = "")
+  sv <- rep("", length(ids)); sv[as.integer(names(sbg))] <- as.character(sbg)
+  tibble(id = ids, seq = sv)
+}
 
 # Type de base (couleurs) & classe Rufflé à partir du type Arriba détaillé
 arriba_base <- function(t) {
@@ -224,6 +235,21 @@ annot <- annot |>
       score_norm >= 0.65 ~ "P1", score_norm >= 0.40 ~ "P2",
       score_norm >= 0.20 ~ "P3", TRUE ~ "NP"), levels = c("P1", "P2", "P3", "NP")))
 
+# Contigs (JB_*.fasta) & k-mers (JB_*_kmers/kmers.fa), rattachés par seq_name
+ff <- list.files(params$dir_fasta, pattern = "^JB_.*\\.fasta$", full.names = TRUE)
+if (length(ff) > 0) {
+  contigs <- map_dfr(ff, read_fasta) |> filter(seq != "") |>
+    distinct(id, .keep_all = TRUE) |> transmute(seq_name = id, contig_seq = seq)
+  annot <- annot |> left_join(contigs, by = "seq_name")
+} else annot$contig_seq <- NA_character_
+kf <- list.files(params$dir_kmers, pattern = "^kmers\\.fa$", recursive = TRUE, full.names = TRUE)
+if (length(kf) > 0) {
+  kmers_tbl <- map_dfr(kf, read_fasta) |> filter(seq != "") |>
+    mutate(seq_name = sub("\\.kmer.*$", "", id)) |> distinct(seq_name, seq) |>
+    group_by(seq_name) |> summarise(n_kmers = n(), kmers = paste(seq, collapse = ";"), .groups = "drop")
+  annot <- annot |> left_join(kmers_tbl, by = "seq_name")
+} else { annot$n_kmers <- NA_integer_; annot$kmers <- NA_character_ }
+
 chromo_spec <- annot |> filter(specificite == "Chromo-spécifique") |> arrange(desc(score_norm))
 cat("Chromo-spécifiques :", nrow(chromo_spec),
     "| matchées Arriba :", sum(chromo_spec$arriba_matched), "\n")
@@ -240,7 +266,8 @@ chromo_spec |>
             Type = arriba_type, Classe = class_ruffle, Cadre = reading_frame,
             `Score` = round(score_norm, 3), Priorité = priorite,
             `N patho+` = n_patho_pos, `max patho` = max_patho,
-            Confidence = confidence, WHO = is_who_interest) |>
+            Confidence = confidence, WHO = is_who_interest,
+            `N kmers` = n_kmers, Contig = contig_seq) |>
   datatable(filter = "top", rownames = FALSE, class = "stripe hover compact",
             options = list(pageLength = 15, scrollX = TRUE))
 ```

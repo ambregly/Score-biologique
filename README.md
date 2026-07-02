@@ -141,7 +141,13 @@ Le script lit **3 dossiers** et en écrit **1** :
 |---|---|---|
 | Comptages mergés patho+WT | `JB_chromo_wt_merge1` | `--dir-merge` |
 | Sorties Arriba `JB_*.tsv` | `starriba` | `--dir-arriba` |
+| Contigs de départ `JB_*.fasta` | `fasta_JB` | `--dir-fasta` |
+| Dossiers k-mers `JB_*_kmers/kmers.fa` | `JB_kmers` | `--dir-kmers` |
 | Dossier de sortie | `analyse_fusions` | `--dir-out` |
+
+Les tables de sortie incluent, pour chaque fusion : la séquence contig
+(`contig_seq`, 51 nt), le nombre de k-mers (`n_kmers`) et les k-mers associés
+(`kmers`, séparés par `;`), rattachés par `seq_name`.
 
 **Mode A — dossier local + liens symboliques** (les défauts relatifs suffisent) :
 ```bash
