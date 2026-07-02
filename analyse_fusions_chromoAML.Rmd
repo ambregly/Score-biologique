@@ -235,30 +235,43 @@ annot <- annot |>
       score_norm >= 0.65 ~ "P1", score_norm >= 0.40 ~ "P2",
       score_norm >= 0.20 ~ "P3", TRUE ~ "NP"), levels = c("P1", "P2", "P3", "NP")))
 
-# Contigs (JB_*.fasta) & k-mers (JB_*_kmers/kmers.fa), rattachés par seq_name
+# Contigs & k-mers par (échantillon, seq_name). Un contig distinct = une entrée ;
+# variantes d'un même seq_name suffixées .2, .3 (annot reste dédupliqué pour les figures).
 ff <- list.files(params$dir_fasta, pattern = "^JB_.*\\.fasta$", full.names = TRUE)
-if (length(ff) > 0) {
-  contigs <- map_dfr(ff, read_fasta) |> filter(seq != "") |>
-    distinct(id, .keep_all = TRUE) |> transmute(seq_name = id, contig_seq = seq)
-  annot <- annot |> left_join(contigs, by = "seq_name")
-} else annot$contig_seq <- NA_character_
 kf <- list.files(params$dir_kmers, pattern = "^kmers\\.fa$", recursive = TRUE, full.names = TRUE)
-if (length(kf) > 0) {
-  kmers_long <- map_dfr(kf, read_fasta) |> filter(seq != "") |>
+contigs_s <- if (length(ff) > 0)
+  map_dfr(ff, ~ read_fasta(.x) |> mutate(sample = str_extract(basename(.x), "JB_[0-9]+"))) |>
+    filter(seq != "") |> transmute(sample, seq_name = id, contig_seq = seq)
+else tibble(sample = character(), seq_name = character(), contig_seq = character())
+kmers_s <- if (length(kf) > 0)
+  map_dfr(kf, ~ read_fasta(.x) |> mutate(sample = str_extract(.x, "JB_[0-9]+"))) |>
+    filter(seq != "") |>
     mutate(seq_name = sub("\\.kmer.*$", "", id),
-           kidx = as.integer(str_match(id, "\\.kmer([0-9]+)")[, 2])) |>
-    filter(!is.na(kidx)) |> arrange(seq_name, kidx) |>
-    distinct(seq_name, kidx, .keep_all = TRUE) |> mutate(kcol = paste0("kmer", kidx))
-  KMER_COLS <- paste0("kmer", seq_len(max(kmers_long$kidx)))
-  kmers_wide <- kmers_long |>
-    pivot_wider(id_cols = seq_name, names_from = kcol, values_from = seq) |>
-    select(seq_name, all_of(KMER_COLS))
-  annot <- annot |>
-    left_join(count(kmers_long, seq_name, name = "n_kmers"), by = "seq_name") |>
-    left_join(kmers_wide, by = "seq_name")
-} else { annot$n_kmers <- NA_integer_; KMER_COLS <- character(0) }
+           kidx = as.integer(str_match(id, "\\.kmer([0-9]+)")[, 2])) |> filter(!is.na(kidx))
+else tibble(sample = character(), seq_name = character(), kidx = integer(), seq = character())
+KMER_COLS <- if (nrow(kmers_s) > 0) paste0("kmer", seq_len(max(kmers_s$kidx))) else character(0)
+kmers_sw <- if (nrow(kmers_s) > 0)
+  kmers_s |> distinct(sample, seq_name, kidx, .keep_all = TRUE) |>
+    mutate(kcol = paste0("kmer", kidx)) |>
+    pivot_wider(id_cols = c(sample, seq_name), names_from = kcol, values_from = seq)
+else tibble(sample = character(), seq_name = character())
+nk <- if (nrow(kmers_s) > 0)
+  kmers_s |> distinct(sample, seq_name, kidx) |> count(sample, seq_name, name = "n_kmers")
+else tibble(sample = character(), seq_name = character(), n_kmers = integer())
+variants <- contigs_s |>
+  left_join(kmers_sw, by = c("sample", "seq_name")) |>
+  left_join(nk, by = c("sample", "seq_name")) |>
+  arrange(seq_name, sample) |>
+  distinct(seq_name, contig_seq, .keep_all = TRUE) |>
+  group_by(seq_name) |> mutate(v = row_number()) |> ungroup() |>
+  mutate(fusion_id = if_else(v == 1, seq_name, paste0(seq_name, ".", v)),
+         n_kmers = coalesce(n_kmers, 0L)) |>
+  select(fusion_id, seq_name, contig_seq, n_kmers, any_of(KMER_COLS))
 
-chromo_spec <- annot |> filter(specificite == "Chromo-spécifique") |> arrange(desc(score_norm))
+chromo_spec <- annot |> filter(specificite == "Chromo-spécifique") |>
+  left_join(variants, by = "seq_name") |>
+  mutate(fusion_id = coalesce(fusion_id, seq_name)) |>
+  arrange(desc(score_norm), fusion_id)
 cat("Chromo-spécifiques :", nrow(chromo_spec),
     "| matchées Arriba :", sum(chromo_spec$arriba_matched), "\n")
 chromo_spec |> count(priorite) |> knitr::kable(caption = "Priorités")
@@ -270,7 +283,7 @@ chromo_spec |> count(priorite) |> knitr::kable(caption = "Priorités")
 
 ```{r table-synth}
 chromo_spec |>
-  transmute(Fusion = paste(gene1, gene2, sep = "--"),
+  transmute(Fusion = paste(gene1, gene2, sep = "--"), ID = fusion_id,
             Type = arriba_type, Classe = class_ruffle, Cadre = reading_frame,
             `Score` = round(score_norm, 3), Priorité = priorite,
             `N patho+` = n_patho_pos, `max patho` = max_patho,

@@ -315,43 +315,56 @@ annot <- annot %>%
   )
 
 # ── 7b. CONTIGS (JB_*.fasta) & K-MERS (JB_*_kmers/kmers.fa) ───────────────────
-# Le header du contig = seq_name ; les headers k-mers = "<seq_name>.kmerN".
+# Header du contig = seq_name ; headers k-mers = "<seq_name>.kmerN".
+# Un même seq_name peut avoir des contigs DIFFÉRENTS selon l'échantillon
+# (fusion_transcript reconstruit à partir des reads). Chaque contig distinct
+# devient une entrée : seq_name, puis seq_name.2, seq_name.3 pour les variantes.
 fasta_files <- list.files(opt$dir_fasta, pattern = "^JB_.*\\.fasta$", full.names = TRUE)
-if (length(fasta_files) > 0) {
-  contigs <- map_dfr(fasta_files, read_fasta) %>%
-    filter(seq != "") %>%
-    distinct(id, .keep_all = TRUE) %>%
-    transmute(seq_name = id, contig_seq = seq)
-  annot <- annot %>% left_join(contigs, by = "seq_name")
-  cat(nrow(contigs), "contigs lus depuis", opt$dir_fasta, "\n")
-} else { annot$contig_seq <- NA_character_; warning("Aucun JB_*.fasta dans ", opt$dir_fasta) }
+kmer_files  <- list.files(opt$dir_kmers, pattern = "^kmers\\.fa$",
+                          recursive = TRUE, full.names = TRUE)
 
-kmer_files <- list.files(opt$dir_kmers, pattern = "^kmers\\.fa$",
-                         recursive = TRUE, full.names = TRUE)
-if (length(kmer_files) > 0) {
-  kmers_long <- map_dfr(kmer_files, read_fasta) %>%
+# Contigs par (échantillon, seq_name)
+contigs_s <- if (length(fasta_files) > 0)
+  map_dfr(fasta_files, ~ read_fasta(.x) %>%
+            mutate(sample = str_extract(basename(.x), "JB_[0-9]+"))) %>%
+    filter(seq != "") %>% transmute(sample, seq_name = id, contig_seq = seq)
+else tibble(sample = character(), seq_name = character(), contig_seq = character())
+
+# K-mers par (échantillon, seq_name), une colonne par position
+kmers_s <- if (length(kmer_files) > 0)
+  map_dfr(kmer_files, ~ read_fasta(.x) %>%
+            mutate(sample = str_extract(.x, "JB_[0-9]+"))) %>%
     filter(seq != "") %>%
     mutate(seq_name = sub("\\.kmer.*$", "", id),
            kidx = as.integer(str_match(id, "\\.kmer([0-9]+)")[, 2])) %>%
-    filter(!is.na(kidx)) %>%
-    arrange(seq_name, kidx) %>%
-    distinct(seq_name, kidx, .keep_all = TRUE) %>%  # un seul k-mer par position
-    mutate(kcol = paste0("kmer", kidx))
-  kmax <- max(kmers_long$kidx)
-  KMER_COLS <- paste0("kmer", seq_len(kmax))   # une colonne par position (≤ 21)
-  kmers_wide <- kmers_long %>%
-    pivot_wider(id_cols = seq_name, names_from = kcol, values_from = seq) %>%
-    select(seq_name, all_of(KMER_COLS))
-  n_kmers_tbl <- kmers_long %>% count(seq_name, name = "n_kmers")
-  annot <- annot %>%
-    left_join(n_kmers_tbl, by = "seq_name") %>%
-    left_join(kmers_wide,  by = "seq_name")
-  cat(nrow(n_kmers_tbl), "fusions avec k-mers |", kmax, "k-mers max\n")
-} else { annot$n_kmers <- NA_integer_; KMER_COLS <- character(0)
-         warning("Aucun kmers.fa dans ", opt$dir_kmers) }
+    filter(!is.na(kidx))
+else tibble(sample = character(), seq_name = character(), kidx = integer(), seq = character())
+
+KMER_COLS <- if (nrow(kmers_s) > 0) paste0("kmer", seq_len(max(kmers_s$kidx))) else character(0)
+kmers_sw <- if (nrow(kmers_s) > 0)
+  kmers_s %>% distinct(sample, seq_name, kidx, .keep_all = TRUE) %>%
+    mutate(kcol = paste0("kmer", kidx)) %>%
+    pivot_wider(id_cols = c(sample, seq_name), names_from = kcol, values_from = seq)
+else tibble(sample = character(), seq_name = character())
+nk <- if (nrow(kmers_s) > 0)
+  kmers_s %>% distinct(sample, seq_name, kidx) %>% count(sample, seq_name, name = "n_kmers")
+else tibble(sample = character(), seq_name = character(), n_kmers = integer())
+
+# Une entrée par contig distinct ; suffixe .2, .3 pour les variantes d'un seq_name
+variants <- contigs_s %>%
+  left_join(kmers_sw, by = c("sample", "seq_name")) %>%
+  left_join(nk,       by = c("sample", "seq_name")) %>%
+  arrange(seq_name, sample) %>%
+  distinct(seq_name, contig_seq, .keep_all = TRUE) %>%   # contigs identiques fusionnés
+  group_by(seq_name) %>% mutate(v = row_number()) %>% ungroup() %>%
+  mutate(fusion_id = if_else(v == 1, seq_name, paste0(seq_name, ".", v)),
+         n_kmers   = coalesce(n_kmers, 0L)) %>%
+  select(fusion_id, seq_name, contig_seq, n_kmers, any_of(KMER_COLS))
+cat(nrow(variants), "entrées contig (dont",
+    sum(str_detect(variants$fusion_id, "\\.[0-9]+$")), "variantes .N)\n")
 
 # ── 8. SORTIES TABLES ────────────────────────────────────────────────────────
-out_cols <- c(
+base_cols <- c(
   "seq_name", "gene1", "bp1", "gene2", "bp2", "specificite", "is_who_interest",
   "score_norm", "priorite",
   "score_type", "score_conf", "score_spec", "score_who", "score_frame", "score_reads",
@@ -361,9 +374,14 @@ out_cols <- c(
   "confidence", "site1", "site2",
   "split_reads1", "split_reads2", "total_reads", "coverage1", "coverage2",
   "transcript_id1", "transcript_id2", "direction1", "direction2",
-  "n_arriba", "samples_arriba",
-  "contig_seq", "n_kmers", KMER_COLS)
-annot_out <- annot %>% select(any_of(out_cols)) %>% arrange(desc(score_norm))
+  "n_arriba", "samples_arriba")
+# Jointure 1:N (duplique les fusions à plusieurs contigs) — sorties uniquement
+annot_out <- annot %>% select(any_of(base_cols)) %>%
+  left_join(variants, by = "seq_name") %>%
+  mutate(fusion_id = coalesce(fusion_id, seq_name)) %>%
+  relocate(fusion_id) %>%
+  select(any_of(c("fusion_id", base_cols, "contig_seq", "n_kmers", KMER_COLS))) %>%
+  arrange(desc(score_norm), fusion_id)
 
 write_tsv(annot_out, file.path(DIR_OUT, "fusions_all_specificite_annotees.tsv"))
 chromo_spec <- annot_out %>% filter(specificite == "Chromo-spécifique")
