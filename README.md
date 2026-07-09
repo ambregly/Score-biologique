@@ -44,7 +44,7 @@ Les étapes 1→6 préparent les données ; l'étape 7 est l'analyse R de ce dé
 ```bash
 chmod +x extract_fasta.sh
 mkdir -p fasta_JB
-for f in /chemin/starriba/JB_*.tsv; do
+for f in /data/nas/projects/2025/JB_GAILLARD/analysis/trimmed/starriba/JB_*.tsv; do
     case "$f" in *_discarded.tsv) continue;; esac
     nom=$(basename "${f%.tsv}")
     bash extract_fasta.sh "$f" "fasta_JB/${nom}.fasta"
@@ -54,7 +54,7 @@ done
 ### 2. kmerator (k-mers spécifiques par échantillon)
 ```bash
 mkdir -p JB_kmers && cd JB_kmers
-for f in ../fasta_JB/JB_*.fasta; do
+for f in ella/home/ambre/fasta_JB/JB_*.fasta; do
     base=$(basename "$f" .fasta)
     kmerator -f "$f" -G 0 -y -o "${base}_kmers"
 done
@@ -65,7 +65,7 @@ cd ..
 ```bash
 # 3a. Index patho (chromoAML)
 mkdir -p rdeer_results
-for d in JB_kmers/JB_*_kmers; do
+for d in scratch/ambre/JB_kmers/JB_*_kmers; do
     base=$(basename "$d" _kmers)
     rdeer query -s janis -p 12800 -q "$d/kmers.fa" \
         -o "rdeer_results/query_result_${base}_on_chromoAML" \
@@ -84,9 +84,9 @@ done
 
 ### 4. Restaurer les noms complets (`get_fullnames.awk`)
 ```bash
-AWK=/chemin/get_fullnames.awk
+AWK=/home/chloe/2026_Projects/2026-05_kmers_AML/get_fullnames.awk
 mkdir -p rdeer_fullnames
-for d in JB_kmers/JB_*_kmers; do
+for d in /scratch/ambre/JB_kmers/JB_*_kmers; do
     base=$(basename "$d" _kmers)
     c=$(ls rdeer_results/query_result_${base}_on_chromoAML* 2>/dev/null | head -1)
     [ -n "$c" ] && awk -f "$AWK" "$d/kmers.fa" "$c" \
@@ -99,7 +99,7 @@ done
 
 ### 5. Merge (`merge-kmer.py`)
 ```bash
-MERGE=/chemin/merge-kmer.py
+MERGE=/data/nas/projects/kmer-collections/github-repository/bin/merge-kmer.py
 mkdir -p JB_chromoAML_merge1 JB_wt_merge1
 for fn in rdeer_fullnames/*_on_chromoAML_fullNames.tsv; do
     b=$(basename "$fn"); b=${b#query_result_}; base=${b%%_on_*}
