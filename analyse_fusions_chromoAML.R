@@ -116,6 +116,10 @@ WHO_FUSIONS_INTEREST <- c(
   "RUNX1--RUNX1T1", "CBFB--MYH11", "PML--RARA", "KMT2A--MLLT3",
   "DEK--NUP214", "NUP98--NSD1", "BCR--ABL1", "NRIP1--MIR99AHG"
 )
+# Gènes dont une duplication interne en tandem (ITD) est un driver LAM connu.
+# Une ITD (ex. FLT3--FLT3) est traitée comme un driver d'intérêt : elle reçoit
+# le bonus WHO et une fraction de type pleine, pour la faire remonter en P1.
+DRIVER_ITD_GENES <- c("FLT3", "KMT2A", "UBTF")
 GENE_ALIASES <- c(
   MLL = "KMT2A", HRX = "KMT2A", ALL1 = "KMT2A", MLL1 = "KMT2A", TRX1 = "KMT2A",
   AF9 = "MLLT3", LTG9 = "MLLT3", AF6 = "MLLT4", AFDN = "MLLT4", ENL = "MLLT1",
@@ -342,7 +346,13 @@ annot <- parsed %>%
       TRUE                         ~ NA_character_),
     is_who_interest = paste(g1n, g2n, sep = "--") %in% WHO_FUSIONS_INTEREST |
                       paste(g2n, g1n, sep = "--") %in% WHO_FUSIONS_INTEREST,
-    is_who_interest = replace_na(is_who_interest, FALSE)) %>%
+    is_who_interest = replace_na(is_who_interest, FALSE),
+    # ITD driver (ex. FLT3-ITD) : duplication interne d'un même gène driver
+    is_itd = str_detect(coalesce(arriba_type, ""), regex("ITD", ignore_case = TRUE)),
+    is_driver_itd = replace_na(
+      is_itd & g1n == g2n & g1n %in% DRIVER_ITD_GENES, FALSE),
+    # driver d'intérêt = fusion WHO connue OU ITD driver
+    is_driver_interest = is_who_interest | is_driver_itd) %>%
   select(-starts_with("tmp_"))
 
 # ── 7. SCORE BIOLOGIQUE PONDÉRÉ & PARAMÉTRABLE ───────────────────────────────
@@ -353,6 +363,7 @@ if (MAX_SCORE <= 0) stop("Tous les poids sont nuls : score impossible.")
 annot <- annot %>%
   mutate(
     frac_type = case_when(
+      is_driver_itd                                  ~ 1.0,   # FLT3-ITD & co : signal fort
       type_base %in% c("Translocation", "Inversion") ~ 1.0,
       type_base %in% c("Délétion", "Duplication")    ~ 0.5,
       type_base == "Read-through"                    ~ 0.25,
@@ -362,7 +373,8 @@ annot <- annot %>%
       str_detect(coalesce(confidence, ""), regex("medium", ignore_case = TRUE)) ~ 0.5,
       TRUE ~ 0),
     frac_spec = case_when(n_wt_pos == 0 ~ 1.0, n_wt_pos == 1 ~ 0.5, TRUE ~ 0),
-    frac_who  = if_else(is_who_interest, 1.0, 0),
+    # bonus driver connu : fusions WHO d'intérêt ET ITD drivers (FLT3-ITD…)
+    frac_who  = if_else(is_driver_interest, 1.0, 0),
     frac_frame = case_when(reading_frame == "in-frame" ~ 1.0,
                            reading_frame == "out-of-frame" ~ 0, TRUE ~ 0.5),
     # couverture reads : granularité fine sur le support de jonction
@@ -445,7 +457,8 @@ cat(nrow(variants), "entrées contig (dont",
 
 # ── 8. SORTIES TABLES ────────────────────────────────────────────────────────
 base_cols <- c(
-  "seq_name", "gene1", "bp1", "gene2", "bp2", "specificite", "is_who_interest",
+  "seq_name", "gene1", "bp1", "gene2", "bp2", "specificite",
+  "is_who_interest", "is_driver_itd",
   "score_norm", "priorite",
   "score_type", "score_conf", "score_spec", "score_who", "score_frame", "score_reads",
   "n_patho_pos", "freq_patho", "n_wt_pos", "freq_wt", "max_patho", "max_wt",
