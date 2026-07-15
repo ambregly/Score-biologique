@@ -497,11 +497,24 @@ fig_df <- annot %>%
          type_base = factor(type_base, levels = names(TYPE_COLORS)))
 cat(nrow(fig_df), "fusions chromo-spécifiques annotées Arriba (base des figures)\n")
 
+# Une même paire de gènes peut avoir plusieurs breakpoints (plusieurs seq_name).
+# Les figures "par fusion" (barplot, classement, décomposition, répartition)
+# doivent afficher UNE barre par paire — sinon geom_col empile les variantes et
+# gonfle les totaux (score cumulé > MAX_SCORE, classement > 100 %).
+# fig_uni : un représentant par paire = meilleur breakpoint (score le plus élevé),
+# avec l'expression max prise sur l'ensemble des variantes.
+fig_uni <- fig_df %>%
+  group_by(fusion_label) %>%
+  mutate(max_patho = max(max_patho, na.rm = TRUE)) %>%
+  slice_max(score_norm, n = 1, with_ties = FALSE) %>%
+  ungroup()
+cat(nrow(fig_uni), "paires de gènes uniques (base des figures par fusion)\n")
+
 # Palette priorités (partagée)
 PRIO_COLORS <- c(P1 = "#d62728", P2 = "#ff7f0e", P3 = "#9467bd", NP = "#bdbdbd")
 
 # 9a. Barplot — top N par expression max (noms sur l'axe Y, toujours visibles)
-p_bar <- fig_df %>% slice_max(max_patho, n = N_TOP, with_ties = FALSE) %>%
+p_bar <- fig_uni %>% slice_max(max_patho, n = N_TOP, with_ties = FALSE) %>%
   mutate(fusion_ord = reorder(fusion_label, max_patho)) %>%
   ggplot(aes(max_patho, fusion_ord, fill = type_base)) +
   geom_col() +
@@ -513,7 +526,7 @@ p_bar <- fig_df %>% slice_max(max_patho, n = N_TOP, with_ties = FALSE) %>%
 ggsave(file.path(DIR_FIG, "barplot_expression.png"), p_bar, width = 11, height = 9, dpi = 150)
 
 # 9b. Classement par score biologique (noms sur l'axe Y = toujours visibles)
-p_rank <- fig_df %>% slice_max(score_norm, n = N_TOP, with_ties = FALSE) %>%
+p_rank <- fig_uni %>% slice_max(score_norm, n = N_TOP, with_ties = FALSE) %>%
   mutate(fusion_ord = reorder(fusion_label, score_norm),
          etiq = paste0(coalesce(class_ruffle, "—"), " · ", coalesce(reading_frame, "—"))) %>%
   ggplot(aes(score_norm, fusion_ord, fill = priorite)) +
@@ -564,7 +577,7 @@ if (nrow(burden) > 0) {
 }
 
 # 9d. Répartition des types chimériques / classes Rufflé
-p_type <- fig_df %>% count(type_base, class_ruffle, name = "n") %>%
+p_type <- fig_uni %>% count(type_base, class_ruffle, name = "n") %>%
   ggplot(aes(n, fct_reorder(type_base, n, sum), fill = class_ruffle)) +
   geom_col() +
   scale_fill_brewer(palette = "Set2", name = "Classe Rufflé", na.value = "grey70") +
@@ -584,7 +597,7 @@ comp_def <- tibble::tribble(
   "score_frame", "Cadre",      opt$w_frame,
   "score_reads", "Reads",      opt$w_reads
 ) %>% filter(weight > 0)
-dec_df <- fig_df %>% slice_max(score_norm, n = N_TOP, with_ties = FALSE) %>%
+dec_df <- fig_uni %>% slice_max(score_norm, n = N_TOP, with_ties = FALSE) %>%
   mutate(fusion_ord = reorder(fusion_label, score_norm)) %>%
   pivot_longer(all_of(comp_def$col), names_to = "comp", values_to = "val") %>%
   mutate(comp = factor(setNames(comp_def$label, comp_def$col)[comp],
