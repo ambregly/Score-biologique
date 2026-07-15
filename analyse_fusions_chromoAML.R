@@ -24,7 +24,7 @@
 # Poids des composantes du score (0 = composante retirée du calcul) :
 #   --type N   type chimérique   (défaut 3)
 #   --conf N   confidence Arriba (défaut 2)
-#   --spec N   spécificité WT    (défaut 2)
+#   --spec N   spécificité WT    (défaut 1)
 #   --who N    fusion WHO        (défaut 2)
 #   --frame N  reading frame     (défaut 2)
 #   --reads N  couverture reads  (défaut 5 ; > type : la couverture prime)
@@ -51,7 +51,7 @@ opt <- list(
   # Poids : la couverture en reads (w_reads) prime désormais sur le type
   # chimérique (w_type) — un signal de fusion bien couvert est plus fiable
   # qu'un type « fort » faiblement supporté.
-  w_type = 3, w_conf = 2, w_spec = 2, w_who = 2, w_frame = 2, w_reads = 5
+  w_type = 3, w_conf = 2, w_spec = 1, w_who = 2, w_frame = 2, w_reads = 5
 )
 
 # Seuil de distance read-through (bp) — délétion courte entre gènes voisins
@@ -475,10 +475,14 @@ has_karyo    <- requireNamespace("karyoploteR", quietly = TRUE) &&
                 requireNamespace("GenomicRanges", quietly = TRUE)
 N_TOP <- opt$n_top
 
+# Représentations : uniquement les fusions chromo-spécifiques ANNOTÉES par Arriba
+# (arriba_matched). Pour inclure aussi les chromo-spé. non retrouvées par Arriba,
+# retirer le second filtre ci-dessous.
 fig_df <- annot %>%
-  filter(specificite == "Chromo-spécifique") %>%
+  filter(specificite == "Chromo-spécifique", arriba_matched) %>%
   mutate(fusion_label = paste(gene1, gene2, sep = "--"),
          type_base = factor(type_base, levels = names(TYPE_COLORS)))
+cat(nrow(fig_df), "fusions chromo-spécifiques annotées Arriba (base des figures)\n")
 
 # Palette priorités (partagée)
 PRIO_COLORS <- c(P1 = "#d62728", P2 = "#ff7f0e", P3 = "#9467bd", NP = "#bdbdbd")

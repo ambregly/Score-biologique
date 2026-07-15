@@ -182,7 +182,7 @@ Rscript analyse_fusions_chromoAML.R \
 |---|---|---|
 | `--type N`  | 3 | type chimérique |
 | `--conf N`  | 2 | confidence Arriba |
-| `--spec N`  | 2 | spécificité WT |
+| `--spec N`  | 1 | spécificité WT (poids réduit) |
 | `--who N`   | 2 | fusion WHO d'intérêt |
 | `--frame N` | 2 | reading frame |
 | `--reads N` | 5 | couverture reads (split reads + paires discordantes) |
@@ -221,7 +221,7 @@ Rscript analyse_fusions_chromoAML.R --frame 0 --conf 0   # score sans cadre ni c
 analyse_fusions/
 ├── fusions_all_specificite_annotees.tsv       # toutes les fusions
 ├── fusions_chromo_specifiques_annotees.tsv     # cible : chromo-spécifiques annotées
-└── figures/
+└── figures/                       # ⚠ uniquement fusions chromo-spé. annotées Arriba
     ├── score_classement.png        # top fusions par score (noms sur l'axe)
     ├── barplot_expression.png      # top fusions par expression max
     ├── charge_par_echantillon.png  # nb de fusions par patient (chromoanagenèse)
