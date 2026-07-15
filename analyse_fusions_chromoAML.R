@@ -22,12 +22,12 @@
 #   --patho-min N  fusion retenue si max(patho) >= N   (défaut 5)
 #
 # Poids des composantes du score (0 = composante retirée du calcul) :
-#   --type N   type chimérique   (défaut 4)
+#   --type N   type chimérique   (défaut 3)
 #   --conf N   confidence Arriba (défaut 2)
 #   --spec N   spécificité WT    (défaut 2)
 #   --who N    fusion WHO        (défaut 2)
 #   --frame N  reading frame     (défaut 2)
-#   --reads N  reads Arriba      (défaut 2)
+#   --reads N  couverture reads  (défaut 5 ; > type : la couverture prime)
 #
 # Autres : --n-top N | --dir-merge | --dir-arriba | --dir-out | --help
 #
@@ -48,8 +48,15 @@ opt <- list(
   dir_out    = "analyse_fusions",       # relatif au dossier courant (getwd())
   wt_min = 0, patho_min = 5,          # filtres (sur le max par cohorte)
   n_top = 30,                          # figures
-  w_type = 4, w_conf = 2, w_spec = 2, w_who = 2, w_frame = 2, w_reads = 2
+  # Poids : la couverture en reads (w_reads) prime désormais sur le type
+  # chimérique (w_type) — un signal de fusion bien couvert est plus fiable
+  # qu'un type « fort » faiblement supporté.
+  w_type = 3, w_conf = 2, w_spec = 2, w_who = 2, w_frame = 2, w_reads = 5
 )
+
+# Seuil de distance read-through (bp) — délétion courte entre gènes voisins
+# colinéaires (Rufflé 2024). Sert au repli géométrique du type chimérique.
+READTHROUGH_DIST <- 300000L
 
 # ── PARSER CLI ───────────────────────────────────────────────────────────────
 alias <- c(type = "w_type", conf = "w_conf", confidence = "w_conf",
@@ -159,6 +166,7 @@ ruffle_class <- function(t) {
 TYPE_COLORS <- c(
   Translocation = "#d62728", Inversion = "#9467bd", "Délétion" = "#ff7f0e",
   Duplication = "#1f77b4", "Read-through" = "#2ca02c",
+  "Indéterminé (même chr)" = "grey75",
   "Non confirmé Arriba" = "grey65", Autre = "grey50"
 )
 
@@ -239,6 +247,10 @@ arriba <- map_dfr(arriba_files, function(f) {
     gkey = map2_chr(resolve_alias(gene1), resolve_alias(gene2),
                     ~ paste(sort(c(.x, .y)), collapse = "|")),
     total_reads = suppressWarnings(as.numeric(split_reads1) + as.numeric(split_reads2)),
+    # couverture de jonction = split reads + paires discordantes (support total)
+    support_reads = suppressWarnings(
+      as.numeric(split_reads1) + as.numeric(split_reads2) +
+      coalesce(as.numeric(discordant_mates), 0)),
     conf_num = case_when(
       str_detect(confidence, regex("high",   ignore_case = TRUE)) ~ 3L,
       str_detect(confidence, regex("medium", ignore_case = TRUE)) ~ 2L,
@@ -259,24 +271,79 @@ arriba_sum <- arriba %>%
       TRUE ~ "."),
     split_reads1 = first(split_reads1), split_reads2 = first(split_reads2),
     total_reads  = suppressWarnings(max(total_reads, na.rm = TRUE)),
+    support_reads = suppressWarnings(max(support_reads, na.rm = TRUE)),
     coverage1 = first(coverage1), coverage2 = first(coverage2),
     transcript_id1 = first(transcript_id1), transcript_id2 = first(transcript_id2),
     direction1 = first(direction1), direction2 = first(direction2),
     n_arriba = n_distinct(sample),
     samples_arriba = paste(sort(unique(sample)), collapse = ", "),
     .groups = "drop") %>%
-  mutate(total_reads = ifelse(is.finite(total_reads), total_reads, NA_real_))
+  mutate(total_reads   = ifelse(is.finite(total_reads),   total_reads,   NA_real_),
+         support_reads = ifelse(is.finite(support_reads), support_reads, NA_real_))
 
 # ── 6. JOINTURE (sur la paire de gènes) ──────────────────────────────────────
 # type_base (couleurs) et class_ruffle dérivés du type Arriba détaillé.
+# Cascade de détermination du type chimérique :
+#   (1) colonne `type` d'Arriba si renseignée (source de vérité) ;
+#   (2) repli géométrique : directions Arriba + ordre des breakpoints
+#       (reproduit get_fusion_type d'Arriba, ~99,6 % de concordance) ;
+#   (3) repli minimal : chromosomes seuls (translocation vs même chr) ;
+#   (4) sinon "Non confirmé Arriba".
 annot <- parsed %>%
   left_join(arriba_sum, by = "gkey") %>%
-  mutate(arriba_matched = !is.na(confidence),
-         type_base    = arriba_base(arriba_type),
-         class_ruffle = ruffle_class(arriba_type),
-         is_who_interest = paste(g1n, g2n, sep = "--") %in% WHO_FUSIONS_INTEREST |
-                           paste(g2n, g1n, sep = "--") %in% WHO_FUSIONS_INTEREST,
-         is_who_interest = replace_na(is_who_interest, FALSE))
+  mutate(
+    arriba_matched = !is.na(confidence),
+    # coordonnées issues du seq_name (toujours présentes) pour le repli
+    tmp_chr1 = str_split_fixed(bp1, ":", 2)[, 1],
+    tmp_pos1 = suppressWarnings(as.numeric(str_split_fixed(bp1, ":", 2)[, 2])),
+    tmp_chr2 = str_split_fixed(bp2, ":", 2)[, 1],
+    tmp_pos2 = suppressWarnings(as.numeric(str_split_fixed(bp2, ":", 2)[, 2])),
+    tmp_d1   = str_trim(coalesce(direction1, "")),
+    tmp_d2   = str_trim(coalesce(direction2, "")),
+    tmp_has_type = !is.na(arriba_type) & !arriba_type %in% c("", "."),
+    tmp_has_dir  = tmp_d1 %in% c("upstream", "downstream") &
+                   tmp_d2 %in% c("upstream", "downstream"),
+    tmp_has_bp   = !is.na(tmp_pos1) & !is.na(tmp_pos2) &
+                   tmp_chr1 != "" & tmp_chr2 != "",
+    # orientation délétion vs duplication (logique get_fusion_type d'Arriba)
+    tmp_del_orient = (tmp_d1 == "downstream" & tmp_pos1 < tmp_pos2) |
+                     (tmp_d1 == "upstream"   & tmp_pos1 > tmp_pos2),
+    # (2) type reconstruit par géométrie (directions + breakpoints)
+    tmp_type_geom = case_when(
+      !tmp_has_dir | !tmp_has_bp                                       ~ NA_character_,
+      tmp_chr1 != tmp_chr2                                             ~ "Translocation",
+      tmp_d1 == tmp_d2                                                 ~ "Inversion",
+      tmp_del_orient & abs(tmp_pos2 - tmp_pos1) < READTHROUGH_DIST     ~ "Read-through",
+      tmp_del_orient                                                   ~ "Délétion",
+      TRUE                                                            ~ "Duplication"),
+    # (3) repli minimal sur les chromosomes seuls
+    tmp_type_chr = case_when(
+      !tmp_has_bp          ~ NA_character_,
+      tmp_chr1 != tmp_chr2 ~ "Translocation",
+      TRUE                 ~ "Indéterminé (même chr)"),
+    # type final + traçabilité de la source
+    type_base = case_when(
+      tmp_has_type              ~ arriba_base(arriba_type),
+      !is.na(tmp_type_geom)     ~ tmp_type_geom,
+      !is.na(tmp_type_chr)      ~ tmp_type_chr,
+      TRUE                      ~ "Non confirmé Arriba"),
+    type_source = case_when(
+      tmp_has_type          ~ "arriba",
+      !is.na(tmp_type_geom) ~ "géométrie",
+      !is.na(tmp_type_chr)  ~ "chr",
+      TRUE                  ~ "absent"),
+    # classe Rufflé dérivée du type final (couvre aussi les replis géométriques)
+    class_ruffle = case_when(
+      type_base == "Translocation" ~ "Class 1",
+      type_base == "Délétion"      ~ "Class 2",
+      type_base == "Read-through"  ~ "Class 2",
+      type_base == "Duplication"   ~ "Class 3",
+      type_base == "Inversion"     ~ "Class 4",
+      TRUE                         ~ NA_character_),
+    is_who_interest = paste(g1n, g2n, sep = "--") %in% WHO_FUSIONS_INTEREST |
+                      paste(g2n, g1n, sep = "--") %in% WHO_FUSIONS_INTEREST,
+    is_who_interest = replace_na(is_who_interest, FALSE)) %>%
+  select(-starts_with("tmp_"))
 
 # ── 7. SCORE BIOLOGIQUE PONDÉRÉ & PARAMÉTRABLE ───────────────────────────────
 # Chaque composante = fraction dans [0,1] × poids. Poids 0 => composante retirée.
@@ -298,8 +365,15 @@ annot <- annot %>%
     frac_who  = if_else(is_who_interest, 1.0, 0),
     frac_frame = case_when(reading_frame == "in-frame" ~ 1.0,
                            reading_frame == "out-of-frame" ~ 0, TRUE ~ 0.5),
-    frac_reads = case_when(coalesce(total_reads, 0) >= 50 ~ 1.0,
-                           coalesce(total_reads, 0) >= 10 ~ 0.5, TRUE ~ 0),
+    # couverture reads : granularité fine sur le support de jonction
+    # (split reads + paires discordantes). Fraction dans [0,1] × w_reads.
+    frac_reads = case_when(
+      coalesce(support_reads, 0) >= 100 ~ 1.00,
+      coalesce(support_reads, 0) >=  50 ~ 0.80,
+      coalesce(support_reads, 0) >=  25 ~ 0.60,
+      coalesce(support_reads, 0) >=  10 ~ 0.40,
+      coalesce(support_reads, 0) >=   5 ~ 0.20,
+      TRUE                              ~ 0),
     score_type  = frac_type  * opt$w_type,
     score_conf  = frac_conf  * opt$w_conf,
     score_spec  = frac_spec  * opt$w_spec,
@@ -376,9 +450,10 @@ base_cols <- c(
   "score_type", "score_conf", "score_spec", "score_who", "score_frame", "score_reads",
   "n_patho_pos", "freq_patho", "n_wt_pos", "freq_wt", "max_patho", "max_wt",
   "samples_patho", "n_fichiers",
-  "arriba_matched", "arriba_type", "class_ruffle", "reading_frame",
-  "confidence", "site1", "site2",
-  "split_reads1", "split_reads2", "total_reads", "coverage1", "coverage2",
+  "arriba_matched", "type_base", "type_source", "arriba_type", "class_ruffle",
+  "reading_frame", "confidence", "site1", "site2",
+  "split_reads1", "split_reads2", "total_reads", "support_reads",
+  "coverage1", "coverage2",
   "transcript_id1", "transcript_id2", "direction1", "direction2",
   "n_arriba", "samples_arriba")
 # Jointure 1:N (duplique les fusions à plusieurs contigs) — sorties uniquement

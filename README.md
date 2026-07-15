@@ -180,16 +180,32 @@ Rscript analyse_fusions_chromoAML.R \
 
 | Option | Défaut | Composante |
 |---|---|---|
-| `--type N`  | 4 | type chimérique |
+| `--type N`  | 3 | type chimérique |
 | `--conf N`  | 2 | confidence Arriba |
 | `--spec N`  | 2 | spécificité WT |
 | `--who N`   | 2 | fusion WHO d'intérêt |
 | `--frame N` | 2 | reading frame |
-| `--reads N` | 2 | reads Arriba |
+| `--reads N` | 5 | couverture reads (split reads + paires discordantes) |
 
 Score normalisé = Σ(fraction × poids) / Σ(poids). Priorités : **P1 ≥ 65 %**,
 **P2 ≥ 40 %**, **P3 ≥ 20 %**. Retirer une composante (`--frame 0`) l'exclut du
 calcul **et** du dénominateur.
+
+> **Pondération** : la **couverture en reads** (`--reads`, défaut 5) prime
+> désormais sur le **type chimérique** (`--type`, défaut 3). Un signal de fusion
+> bien couvert est jugé plus fiable qu'un type « fort » (translocation/inversion)
+> faiblement supporté. La composante reads a une granularité fine
+> (≥ 5 / 10 / 25 / 50 / 100 reads → 0,2 / 0,4 / 0,6 / 0,8 / 1,0).
+
+### Détermination du type chimérique
+
+Le type est repris de la colonne `type` d'Arriba quand elle est renseignée. Si
+elle est **absente**, il est reconstruit par géométrie — directions (`upstream`/
+`downstream`) + ordre des breakpoints, reproduisant la logique `get_fusion_type`
+d'Arriba (concordance 100 % sur les fusions testées). En dernier recours (ni type
+ni direction), seuls les chromosomes distinguent une translocation d'un cas
+« même chr » indéterminé. La colonne `type_source` (`arriba` / `géométrie` /
+`chr` / `absent`) trace l'origine de chaque classification.
 
 Autres : `--n-top N` (fusions dans les figures, défaut 30), `--help`.
 
