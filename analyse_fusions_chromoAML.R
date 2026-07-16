@@ -659,12 +659,23 @@ p_focal <- ggplot(foc_df, aes(score_norm, max_patho)) +
        subtitle = "Score biologique × expression max par patient · focalité = spécificité à un sous-groupe",
        x = "Score biologique", y = "Comptage k-mer max chez un patient (log)") +
   theme(plot.title = element_text(face = "bold"), legend.position = "right")
-if (has_repel) {
-  p_focal <- p_focal +
-    ggrepel::geom_text_repel(
-      data = dplyr::filter(foc_df, a_labeliser),
-      aes(label = fusion_label), size = 2.4, max.overlaps = 20,
-      min.segment.length = 0, box.padding = 0.4, color = "grey20")
+# Étiquettes des candidates : ggrepel si dispo (rien n'est masqué -> Inf),
+# sinon repli sur geom_text pour que les noms s'affichent toujours.
+lab_df <- dplyr::filter(foc_df, a_labeliser)
+cat(nrow(lab_df), "fusion(s) étiquetée(s) sur la carte de priorisation",
+    if (!has_repel) "(geom_text — installer ggrepel pour un placement propre)" else "", "\n")
+if (nrow(lab_df) > 0) {
+  if (has_repel) {
+    p_focal <- p_focal +
+      ggrepel::geom_text_repel(
+        data = lab_df, aes(label = fusion_label), size = 2.6,
+        max.overlaps = Inf, min.segment.length = 0, box.padding = 0.4,
+        segment.color = "grey60", color = "grey20")
+  } else {
+    p_focal <- p_focal +
+      geom_text(data = lab_df, aes(label = fusion_label),
+                size = 2.4, vjust = -0.8, color = "grey20", check_overlap = TRUE)
+  }
 }
 ggsave(file.path(DIR_FIG, "carte_priorisation.png"), p_focal, width = 11, height = 8, dpi = 200)
 
