@@ -208,6 +208,7 @@ spec <- agg %>%
   transmute(seq_name, n_fichiers) %>%
   mutate(
     max_patho   = apply(mat_patho, 1, max),
+    sum_patho   = rowSums(mat_patho),   # comptage cumulé sur la cohorte patho
     max_wt      = apply(mat_wt,    1, max),
     # positivité par individu (pour la fréquence / les figures)
     n_patho_pos = rowSums(mat_patho >= opt$patho_min),
@@ -461,7 +462,8 @@ base_cols <- c(
   "is_who_interest", "is_driver_itd",
   "score_norm", "priorite",
   "score_type", "score_conf", "score_spec", "score_who", "score_frame", "score_reads",
-  "n_patho_pos", "freq_patho", "n_wt_pos", "freq_wt", "max_patho", "max_wt",
+  "n_patho_pos", "freq_patho", "n_wt_pos", "freq_wt",
+  "max_patho", "sum_patho", "max_wt",
   "samples_patho", "n_fichiers",
   "arriba_matched", "type_base", "type_source", "arriba_type", "class_ruffle",
   "reading_frame", "confidence", "site1", "site2",
@@ -505,7 +507,8 @@ cat(nrow(fig_df), "fusions chromo-spécifiques annotées Arriba (base des figure
 # avec l'expression max prise sur l'ensemble des variantes.
 fig_uni <- fig_df %>%
   group_by(fusion_label) %>%
-  mutate(max_patho = max(max_patho, na.rm = TRUE)) %>%
+  mutate(max_patho = max(max_patho, na.rm = TRUE),
+         sum_patho = max(sum_patho, na.rm = TRUE)) %>%
   slice_max(score_norm, n = 1, with_ties = FALSE) %>%
   ungroup()
 cat(nrow(fig_uni), "paires de gènes uniques (base des figures par fusion)\n")
@@ -513,16 +516,26 @@ cat(nrow(fig_uni), "paires de gènes uniques (base des figures par fusion)\n")
 # Palette priorités (partagée)
 PRIO_COLORS <- c(P1 = "#d62728", P2 = "#ff7f0e", P3 = "#9467bd", NP = "#bdbdbd")
 
-# 9a. Barplot — top N par expression max (noms sur l'axe Y, toujours visibles)
-p_bar <- fig_uni %>% slice_max(max_patho, n = N_TOP, with_ties = FALSE) %>%
-  mutate(fusion_ord = reorder(fusion_label, max_patho)) %>%
-  ggplot(aes(max_patho, fusion_ord, fill = type_base)) +
-  geom_col() +
-  scale_fill_manual(values = TYPE_COLORS, drop = FALSE, name = "Type (Arriba)") +
-  scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
-  labs(title = paste0("Top ", N_TOP, " fusions chromo-spécifiques — expression max"),
-       x = "Comptage k-mer max chez un individu (patho)", y = NULL) +
-  theme(axis.text.y = element_text(size = 7))
+# 9a. Barplot — top N par expression : total cohorte patho + max chez un individu
+# Deux barres par fusion (dodge) : comptage k-mer cumulé sur les patients patho
+# (rouge) et maximum observé chez un seul individu (orange). L'écart entre les
+# deux reflète l'hétérogénéité intra-cohorte (fusion diffuse vs portée par 1-2 cas).
+p_bar <- fig_uni %>% slice_max(sum_patho, n = N_TOP, with_ties = FALSE) %>%
+  mutate(fusion_ord = reorder(fusion_label, sum_patho)) %>%
+  pivot_longer(c(sum_patho, max_patho), names_to = "metric", values_to = "valeur") %>%
+  mutate(metric = c(sum_patho = "Total cohorte patho",
+                    max_patho = "Max chez un individu")[metric],
+         metric = factor(metric, levels = c("Total cohorte patho", "Max chez un individu"))) %>%
+  ggplot(aes(valeur, fusion_ord, fill = metric)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.65) +
+  scale_fill_manual(values = c("Total cohorte patho"  = "#d62728",
+                               "Max chez un individu" = "#ff7f0e"), name = NULL) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.05)),
+                     labels = scales::comma_format(big.mark = " ")) +
+  labs(title = paste0("Top ", N_TOP, " fusions chromo-spécifiques — expression k-mers"),
+       subtitle = "Total cumulé sur la cohorte patho vs maximum chez un seul individu",
+       x = "Comptage k-mer", y = NULL) +
+  theme(axis.text.y = element_text(size = 7), legend.position = "top")
 ggsave(file.path(DIR_FIG, "barplot_expression.png"), p_bar, width = 11, height = 9, dpi = 150)
 
 # 9b. Classement par score biologique (noms sur l'axe Y = toujours visibles)
