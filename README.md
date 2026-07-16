@@ -226,12 +226,27 @@ analyse_fusions/
     ├── barplot_expression.png      # top fusions par expression max
     ├── charge_par_echantillon.png  # nb de fusions par patient (chromoanagenèse)
     ├── repartition_types.png       # types chimériques / classes Rufflé
+    ├── carte_priorisation.png      # score × expression max/patient, coloré par focalité
     ├── score_decomposition.png     # décomposition A..H du score
     ├── heatmap_fusions.png         (si pheatmap)
     ├── karyotype_overview.png      (si karyoploteR)
     └── karyotypes/                 # un karyotype par patient (si karyoploteR)
         └── karyotype_JB_*.png
 ```
+
+**Carte de priorisation & focalité.** `carte_priorisation.png` croise le score
+biologique (x) et le comptage k-mer **max chez un patient** (y, log), et colore
+chaque fusion par sa **focalité** :
+
+- `n_eff_patho` = nombre *effectif* de patients porteurs = `(Σxᵢ)² / Σxᵢ²`
+  (~1 = concentré sur un patient, ~k = réparti sur k patients) ;
+- `foc_index` = `max² / somme` : élevé si forte expression concentrée sur peu de
+  patients (spécifique à un sous-groupe), faible si diffuse et faible.
+
+Interprétation : une fusion exprimée **fortement chez 1–3 patients** (points rouges/
+orange, `foc_index` élevé) est plus intéressante qu'une fusion diffuse à bas niveau
+sur beaucoup de patients (points bleus, `foc_index` faible). Les deux métriques
+sont aussi exportées dans le TSV.
 
 ---
 

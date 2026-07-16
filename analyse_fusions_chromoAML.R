@@ -208,7 +208,13 @@ spec <- agg %>%
   transmute(seq_name, n_fichiers) %>%
   mutate(
     max_patho   = apply(mat_patho, 1, max),
-    sum_patho   = rowSums(mat_patho),   # comptage cumulé sur la cohorte patho
+    sum_patho   = rowSums(mat_patho),        # comptage cumulé sur la cohorte patho
+    sumsq_patho = rowSums(mat_patho^2),      # pour l'indice de focalité
+    # n_eff : nombre EFFECTIF de patients porteurs (~1 = mono-patient, ~k = diffus)
+    n_eff_patho = if_else(sumsq_patho > 0, sum_patho^2 / sumsq_patho, 0),
+    # foc_index : max² / somme — élevé si forte expression concentrée sur peu de
+    # patients, faible si diffuse et faible. Chiffre de focalité (spécificité patient).
+    foc_index   = if_else(sum_patho > 0, max_patho^2 / sum_patho, 0),
     max_wt      = apply(mat_wt,    1, max),
     # positivité par individu (pour la fréquence / les figures)
     n_patho_pos = rowSums(mat_patho >= opt$patho_min),
@@ -463,7 +469,7 @@ base_cols <- c(
   "score_norm", "priorite",
   "score_type", "score_conf", "score_spec", "score_who", "score_frame", "score_reads",
   "n_patho_pos", "freq_patho", "n_wt_pos", "freq_wt",
-  "max_patho", "sum_patho", "max_wt",
+  "max_patho", "sum_patho", "n_eff_patho", "foc_index", "max_wt",
   "samples_patho", "n_fichiers",
   "arriba_matched", "type_base", "type_source", "arriba_type", "class_ruffle",
   "reading_frame", "confidence", "site1", "site2",
@@ -510,7 +516,12 @@ fig_uni <- fig_df %>%
   mutate(max_patho = max(max_patho, na.rm = TRUE),
          sum_patho = max(sum_patho, na.rm = TRUE)) %>%
   slice_max(score_norm, n = 1, with_ties = FALSE) %>%
-  ungroup()
+  ungroup() %>%
+  mutate(foc_cat = factor(case_when(
+           n_patho_pos <= 1 ~ "1 patient (mono)",
+           n_patho_pos <= 3 ~ "2–3 patients (focale)",
+           TRUE             ~ "≥ 4 patients (diffuse)"),
+         levels = c("1 patient (mono)", "2–3 patients (focale)", "≥ 4 patients (diffuse)")))
 cat(nrow(fig_uni), "paires de gènes uniques (base des figures par fusion)\n")
 
 # Palette priorités (partagée)
@@ -622,6 +633,40 @@ p_dec <- ggplot(dec_df, aes(val, fusion_ord, fill = comp)) +
        x = paste0("Points cumulés (max = ", MAX_SCORE, ")"), y = NULL) +
   theme(axis.text.y = element_text(size = 7), legend.position = "bottom")
 ggsave(file.path(DIR_FIG, "score_decomposition.png"), p_dec, width = 11, height = 9, dpi = 150)
+
+# 9f. Carte de priorisation : score biologique × expression focale ────────────
+# Met en évidence les fusions potentiellement importantes :
+#   x = score biologique  |  y = max de comptage chez UN patient (log)
+#   couleur = focalité (exprimée chez 1 / 2-3 / >=4 patients)
+#   taille  = foc_index (max^2 / somme : force × concentration).
+# Cadran cible = haut-droite (score élevé) + points chauds (mono / focale).
+foc_df <- fig_uni %>%
+  mutate(a_labeliser = score_norm >= 0.40 & n_patho_pos <= 3)
+FOC_COLORS <- c("1 patient (mono)"       = "#d62728",
+                "2–3 patients (focale)"  = "#ff7f0e",
+                "≥ 4 patients (diffuse)" = "#1f77b4")
+p_focal <- ggplot(foc_df, aes(score_norm, max_patho)) +
+  annotate("rect", xmin = 0.65, xmax = Inf, ymin = 0, ymax = Inf,
+           fill = "#d62728", alpha = 0.04) +
+  geom_vline(xintercept = 0.65, linetype = "dashed", color = "grey40", linewidth = 0.3) +
+  geom_vline(xintercept = 0.40, linetype = "dotted", color = "grey55", linewidth = 0.3) +
+  geom_point(aes(color = foc_cat, size = foc_index), alpha = 0.8) +
+  scale_y_log10(labels = scales::comma_format(big.mark = " ")) +
+  scale_color_manual(values = FOC_COLORS, name = "Focalité") +
+  scale_size_continuous(name = "Indice focalité\n(max² / somme)", range = c(1.5, 9)) +
+  scale_x_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1)) +
+  labs(title = "Carte de priorisation des fusions chromo-spécifiques",
+       subtitle = "Score biologique × expression max par patient · focalité = spécificité à un sous-groupe",
+       x = "Score biologique", y = "Comptage k-mer max chez un patient (log)") +
+  theme(plot.title = element_text(face = "bold"), legend.position = "right")
+if (has_repel) {
+  p_focal <- p_focal +
+    ggrepel::geom_text_repel(
+      data = dplyr::filter(foc_df, a_labeliser),
+      aes(label = fusion_label), size = 2.4, max.overlaps = 20,
+      min.segment.length = 0, box.padding = 0.4, color = "grey20")
+}
+ggsave(file.path(DIR_FIG, "carte_priorisation.png"), p_focal, width = 11, height = 8, dpi = 200)
 
 # 9d. Heatmap présence/absence (top score)
 if (has_pheatmap) {
