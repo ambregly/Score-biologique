@@ -641,7 +641,7 @@ ggsave(file.path(DIR_FIG, "score_decomposition.png"), p_dec, width = 11, height 
 #   taille  = foc_index (max^2 / somme : force × concentration).
 # Cadran cible = haut-droite (score élevé) + points chauds (mono / focale).
 foc_df <- fig_uni %>%
-  mutate(a_labeliser = score_norm >= 0.40 & n_patho_pos <= 3)
+  mutate(a_labeliser = priorite == "P1")   # noms affichés seulement pour les P1
 FOC_COLORS <- c("1 patient (mono)"       = "#d62728",
                 "2–3 patients (focale)"  = "#ff7f0e",
                 "≥ 4 patients (diffuse)" = "#1f77b4")
