@@ -30,6 +30,7 @@
 #   --reads N  couverture reads  (défaut 5 ; > type : la couverture prime)
 #
 # Autres : --n-top N | --dir-merge | --dir-arriba | --dir-out | --help
+#   --fig-format pdf|png   format des figures (défaut pdf)
 #
 # Exemple : Rscript analyse_fusions_chromoAML.R --who 3 --patho-min 10
 # =============================================================================
@@ -46,6 +47,7 @@ opt <- list(
   dir_fasta  = "fasta_JB",              # contigs de départ JB_*.fasta
   dir_kmers  = "JB_kmers",              # dossiers JB_*_kmers/kmers.fa
   dir_out    = "analyse_fusions",       # relatif au dossier courant (getwd())
+  fig_format = "pdf",                    # format des figures : "pdf" ou "png"
   wt_min = 0, patho_min = 5,          # filtres (sur le max par cohorte)
   n_top = 30,                          # figures
   # Poids : la couverture en reads (w_reads) prime désormais sur le type
@@ -61,13 +63,15 @@ READTHROUGH_DIST <- 300000L
 # ── PARSER CLI ───────────────────────────────────────────────────────────────
 alias <- c(type = "w_type", conf = "w_conf", confidence = "w_conf",
            spec = "w_spec", specificity = "w_spec", who = "w_who",
-           frame = "w_frame", reads = "w_reads")
-string_opts <- c("dir_merge", "dir_arriba", "dir_fasta", "dir_kmers", "dir_out")
+           frame = "w_frame", reads = "w_reads",
+           fig = "fig_format", format = "fig_format")
+string_opts <- c("dir_merge", "dir_arriba", "dir_fasta", "dir_kmers", "dir_out",
+                 "fig_format")
 
 args <- commandArgs(trailingOnly = TRUE)
 if ("--help" %in% args || "-h" %in% args) {
   cat("Options : --wt-min --patho-min --type --conf --spec --who --frame",
-      "--reads --n-top --dir-merge --dir-arriba --dir-out\n")
+      "--reads --n-top --dir-merge --dir-arriba --dir-out --fig-format\n")
   cat("Voir l'entête du script pour le détail.\n")
   quit(status = 0)
 }
@@ -100,6 +104,15 @@ dir.create(DIR_OUT, showWarnings = FALSE, recursive = TRUE)
 dir.create(DIR_FIG, showWarnings = FALSE, recursive = TRUE)
 theme_set(theme_bw(base_size = 12))
 
+# ── Format des figures (pdf par défaut) ──────────────────────────────────────
+FIG_EXT <- tolower(opt$fig_format)
+if (!FIG_EXT %in% c("pdf", "png")) {
+  warning("Format figure inconnu (", opt$fig_format, ") — pdf utilisé.")
+  FIG_EXT <- "pdf"
+}
+# Chemin d'une figure avec l'extension choisie
+fig_path <- function(name) file.path(DIR_FIG, paste0(name, ".", FIG_EXT))
+
 cat("=== CONFIGURATION ===\n")
 cat("Dossier courant :", getwd(), "\n")
 cat("  merge  :", normalizePath(opt$dir_merge,  mustWork = FALSE), "\n")
@@ -107,6 +120,7 @@ cat("  arriba :", normalizePath(opt$dir_arriba, mustWork = FALSE), "\n")
 cat("  fasta  :", normalizePath(opt$dir_fasta,  mustWork = FALSE), "\n")
 cat("  kmers  :", normalizePath(opt$dir_kmers,  mustWork = FALSE), "\n")
 cat("  sortie :", normalizePath(opt$dir_out,    mustWork = FALSE), "\n")
+cat("  figures:", DIR_FIG, "(format", FIG_EXT, ")\n")
 cat(sprintf("Filtres : max(WT) <= %s  |  max(patho) >= %s\n", opt$wt_min, opt$patho_min))
 cat(sprintf("Poids   : type=%s conf=%s spec=%s who=%s frame=%s reads=%s\n\n",
             opt$w_type, opt$w_conf, opt$w_spec, opt$w_who, opt$w_frame, opt$w_reads))
@@ -547,7 +561,7 @@ p_bar <- fig_uni %>% slice_max(sum_patho, n = N_TOP, with_ties = FALSE) %>%
        subtitle = "Total cumulé sur la cohorte patho vs maximum chez un seul individu",
        x = "Comptage k-mer", y = NULL) +
   theme(axis.text.y = element_text(size = 7), legend.position = "top")
-ggsave(file.path(DIR_FIG, "barplot_expression.png"), p_bar, width = 11, height = 9, dpi = 150)
+ggsave(fig_path("barplot_expression"), p_bar, width = 11, height = 9, dpi = 150)
 
 # 9b. Classement par score biologique (noms sur l'axe Y = toujours visibles)
 p_rank <- fig_uni %>% slice_max(score_norm, n = N_TOP, with_ties = FALSE) %>%
@@ -567,7 +581,7 @@ p_rank <- fig_uni %>% slice_max(score_norm, n = N_TOP, with_ties = FALSE) %>%
        x = "Score normalisé", y = NULL) +
   theme(axis.text.y = element_text(size = 7),
         panel.grid.minor = element_blank(), plot.title = element_text(face = "bold"))
-ggsave(file.path(DIR_FIG, "score_classement.png"), p_rank, width = 12, height = 9, dpi = 200)
+ggsave(fig_path("score_classement"), p_rank, width = 12, height = 9, dpi = 200)
 
 # 9c. Charge de fusions par échantillon (signature chromoanagenèse)
 # On ne compte que les fusions au type confirmé par Arriba ;
@@ -596,7 +610,7 @@ if (nrow(burden) > 0) {
     labs(title = "Charge de fusions chromo-spécifiques par échantillon",
          subtitle = sub_burden, x = "Nombre de fusions", y = NULL) +
     theme(plot.title = element_text(face = "bold"))
-  ggsave(file.path(DIR_FIG, "charge_par_echantillon.png"), p_burden,
+  ggsave(fig_path("charge_par_echantillon"), p_burden,
          width = 10, height = 7, dpi = 150)
 }
 
@@ -609,7 +623,7 @@ p_type <- fig_uni %>% count(type_base, class_ruffle, name = "n") %>%
   labs(title = "Répartition des types chimériques",
        x = "Nombre de fusions chromo-spécifiques", y = NULL) +
   theme(plot.title = element_text(face = "bold"))
-ggsave(file.path(DIR_FIG, "repartition_types.png"), p_type, width = 9, height = 5, dpi = 150)
+ggsave(fig_path("repartition_types"), p_type, width = 9, height = 5, dpi = 150)
 
 # 9e. Décomposition du score — seulement les composantes actives (poids > 0)
 comp_def <- tibble::tribble(
@@ -632,7 +646,7 @@ p_dec <- ggplot(dec_df, aes(val, fusion_ord, fill = comp)) +
   labs(title = "Décomposition du score biologique",
        x = paste0("Points cumulés (max = ", MAX_SCORE, ")"), y = NULL) +
   theme(axis.text.y = element_text(size = 7), legend.position = "bottom")
-ggsave(file.path(DIR_FIG, "score_decomposition.png"), p_dec, width = 11, height = 9, dpi = 150)
+ggsave(fig_path("score_decomposition"), p_dec, width = 11, height = 9, dpi = 150)
 
 # 9f. Carte de priorisation : score biologique × expression focale ────────────
 # Met en évidence les fusions potentiellement importantes :
@@ -677,7 +691,7 @@ if (nrow(lab_df) > 0) {
                 size = 2.4, vjust = -0.8, color = "grey20", check_overlap = TRUE)
   }
 }
-ggsave(file.path(DIR_FIG, "carte_priorisation.png"), p_focal, width = 11, height = 8, dpi = 200)
+ggsave(fig_path("carte_priorisation"), p_focal, width = 11, height = 8, dpi = 200)
 
 # 9d. Heatmap présence/absence (top score)
 if (has_pheatmap) {
@@ -699,14 +713,15 @@ if (has_pheatmap) {
       annotation_row = ar, cluster_cols = TRUE, legend = FALSE,
       fontsize_row = 7, fontsize_col = 7,
       main = "Présence/absence — fusions chromo-spécifiques (top score)",
-      filename = file.path(DIR_FIG, "heatmap_fusions.png"), width = 10, height = 11)
+      filename = fig_path("heatmap_fusions"), width = 10, height = 11)
   }
 }
 
 # 9e. Karyotypes (breakpoints des fusions confirmées Arriba) — ensemble + par patient
 draw_karyo <- function(ks_df, titre, fichier) {
   if (nrow(ks_df) == 0) return(invisible())
-  png(fichier, width = 1300, height = 1000, res = 120)
+  if (FIG_EXT == "pdf") pdf(fichier, width = 11, height = 8.5)
+  else                  png(fichier, width = 1300, height = 1000, res = 120)
   kp <- karyoploteR::plotKaryotype(genome = "hg38", main = titre)
   for (j in seq_len(nrow(ks_df))) {
     r <- ks_df[j, ]; col <- TYPE_COLORS[r$type_base]
@@ -732,7 +747,7 @@ if (has_karyo) {
 
   # Vue d'ensemble (toutes cohortes confondues)
   draw_karyo(ks_all, "Breakpoints des fusions chromo-spécifiques (toutes)",
-             file.path(DIR_FIG, "karyotype_overview.png"))
+             fig_path("karyotype_overview"))
 
   # Un karyotype par patient : fusions présentes chez cet échantillon
   dir_kar <- file.path(DIR_FIG, "karyotypes")
@@ -744,7 +759,7 @@ if (has_karyo) {
       ks_s  <- ks_all %>% filter(seq_name %in% seqs)
       if (nrow(ks_s) == 0) next
       draw_karyo(ks_s, paste0(s, " — ", nrow(ks_s), " fusion(s) chromo-spé."),
-                 file.path(dir_kar, paste0("karyotype_", s, ".png")))
+                 file.path(dir_kar, paste0("karyotype_", s, ".", FIG_EXT)))
     }
     cat("Karyotypes par patient écrits dans :", dir_kar, "\n")
   }

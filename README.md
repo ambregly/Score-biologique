@@ -222,17 +222,19 @@ analyse_fusions/
 ├── fusions_all_specificite_annotees.tsv       # toutes les fusions
 ├── fusions_chromo_specifiques_annotees.tsv     # cible : chromo-spécifiques annotées
 └── figures/                       # ⚠ uniquement fusions chromo-spé. annotées Arriba
-    ├── score_classement.png        # top fusions par score (noms sur l'axe)
-    ├── barplot_expression.png      # top fusions par expression max
-    ├── charge_par_echantillon.png  # nb de fusions par patient (chromoanagenèse)
-    ├── repartition_types.png       # types chimériques / classes Rufflé
-    ├── carte_priorisation.png      # score × expression max/patient, coloré par focalité
-    ├── score_decomposition.png     # décomposition A..H du score
-    ├── heatmap_fusions.png         (si pheatmap)
-    ├── karyotype_overview.png      (si karyoploteR)
+    ├── score_classement.pdf        # top fusions par score (noms sur l'axe)
+    ├── barplot_expression.pdf      # top fusions par expression max
+    ├── charge_par_echantillon.pdf  # nb de fusions par patient (chromoanagenèse)
+    ├── repartition_types.pdf       # types chimériques / classes Rufflé
+    ├── carte_priorisation.pdf      # score × expression max/patient, coloré par focalité
+    ├── score_decomposition.pdf     # décomposition A..H du score
+    ├── heatmap_fusions.pdf         (si pheatmap)
+    ├── karyotype_overview.pdf      (si karyoploteR)
     └── karyotypes/                 # un karyotype par patient (si karyoploteR)
-        └── karyotype_JB_*.png
+        └── karyotype_JB_*.pdf
 ```
+
+Format des figures : **pdf par défaut**, modifiable via `--fig-format png`.
 
 **Carte de priorisation & focalité.** `carte_priorisation.png` croise le score
 biologique (x) et le comptage k-mer **max chez un patient** (y, log), et colore
