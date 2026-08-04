@@ -693,61 +693,67 @@ if (nrow(lab_df) > 0) {
 }
 ggsave(fig_path("carte_priorisation"), p_focal, width = 11, height = 8, dpi = 200)
 
-# 9d. Heatmap présence/absence — fusions P1 & P2, séquences dédupliquées
-# Les fusions d'une même paire de gènes avec des breakpoints légèrement
-# différents mais le MÊME contig sont fusionnées en une seule ligne (présence
-# = OU sur les patients). Si les séquences diffèrent, les lignes restent
-# distinctes (transcrits réellement différents).
+# 9d. Heatmap — fusions P1 & P2, une ligne par paire de gènes
+# Tous les variants (.1 .2 …) d'une même paire de gènes sont regroupés sur une
+# seule ligne. La cellule affiche le NOMBRE de variants détectés chez le patient
+# (vide si aucun) ; le nom de ligne porte le nb total de variants entre
+# parenthèses, ex. "RUNX1--RUNX1 (3)".
 if (has_pheatmap) {
   bin <- (mat_patho >= opt$patho_min) * 1L
   HEATMAP_MAX <- 60
 
-  # signature séquence par seq_name = set de contigs distincts (triés)
-  seq_sig <- contigs_s %>%
-    distinct(seq_name, contig_seq) %>%
-    group_by(seq_name) %>%
-    summarise(sig = paste(sort(unique(contig_seq)), collapse = "|"), .groups = "drop")
-
-  # fusions P1/P2 présentes dans la matrice, groupées par paire + séquence
   sel <- fig_df %>%
-    filter(priorite %in% c("P1", "P2"), seq_name %in% rownames(bin)) %>%
-    left_join(seq_sig, by = "seq_name") %>%
-    mutate(grp = paste(fusion_label, coalesce(sig, seq_name), sep = "@@"))
+    filter(priorite %in% c("P1", "P2"), seq_name %in% rownames(bin))
 
-  if (nrow(sel) > 1) {
-    # présence fusionnée : OU des patients sur les seq_name d'un même groupe
-    grp_map <- sel %>% distinct(seq_name, grp)
-    merged <- as.data.frame(bin) %>% rownames_to_column("seq_name") %>%
+  if (n_distinct(sel$fusion_label) > 1) {
+    # nombre de variants (breakpoints) présents par patient = somme des bin
+    grp_map <- sel %>% distinct(seq_name, fusion_label)
+    cnt <- as.data.frame(bin) %>% rownames_to_column("seq_name") %>%
       inner_join(grp_map, by = "seq_name") %>%
-      group_by(grp) %>%
-      summarise(across(all_of(patho_cols), ~ as.integer(any(.x > 0))), .groups = "drop")
+      group_by(fusion_label) %>%
+      summarise(across(all_of(patho_cols), ~ as.integer(sum(.x))), .groups = "drop")
 
-    # représentant par groupe (meilleur score) pour le label + l'annotation
-    rep_grp <- sel %>% group_by(grp) %>%
-      slice_max(score_norm, n = 1, with_ties = FALSE) %>% ungroup() %>%
+    # métadonnées par paire : nb total de variants + meilleur score/type/priorité
+    meta <- sel %>% arrange(desc(score_norm)) %>%
+      group_by(fusion_label) %>%
+      summarise(n_var = n_distinct(seq_name), score_norm = first(score_norm),
+                type_base = first(type_base), priorite = first(priorite),
+                .groups = "drop") %>%
       arrange(desc(score_norm)) %>% slice_head(n = HEATMAP_MAX)
 
-    merged <- merged %>% filter(grp %in% rep_grp$grp)
-    merged <- merged[match(rep_grp$grp, merged$grp), ]     # ordre = score décroissant
-    mat_m  <- merged %>% column_to_rownames("grp") %>% as.matrix()
-    mat_m  <- mat_m[rowSums(mat_m) > 0, , drop = FALSE]
+    cnt   <- cnt %>% filter(fusion_label %in% meta$fusion_label)
+    cnt   <- cnt[match(meta$fusion_label, cnt$fusion_label), ]  # ordre = score
+    mat_c <- cnt %>% column_to_rownames("fusion_label") %>% as.matrix()
+    mat_c <- mat_c[rowSums(mat_c) > 0, , drop = FALSE]
 
-    lab <- setNames(rep_grp$fusion_label, rep_grp$grp)[rownames(mat_m)]
-    ann <- data.frame(
-      Type     = setNames(as.character(rep_grp$type_base), rep_grp$grp)[rownames(mat_m)],
-      Priorité = setNames(as.character(rep_grp$priorite),  rep_grp$grp)[rownames(mat_m)])
-    rownames(mat_m) <- make.unique(unname(lab))
-    rownames(ann)   <- rownames(mat_m)
+    meta  <- meta %>% filter(fusion_label %in% rownames(mat_c))
+    meta  <- meta[match(rownames(mat_c), meta$fusion_label), ]
+    labs  <- ifelse(meta$n_var > 1,
+                    paste0(meta$fusion_label, " (", meta$n_var, ")"),
+                    meta$fusion_label)
+    ann <- data.frame(Type = as.character(meta$type_base),
+                      Priorité = as.character(meta$priorite))
+    rownames(mat_c) <- labs
+    rownames(ann)   <- labs
 
-    cat("Heatmap :", nrow(sel), "fusions P1/P2 ->", nrow(mat_m),
-        "lignes après fusion des séquences identiques\n")
+    # nombres affichés dans les cellules (vide si 0)
+    disp <- matrix(ifelse(mat_c > 0, as.character(mat_c), ""),
+                   nrow = nrow(mat_c), dimnames = dimnames(mat_c))
+    maxc <- max(mat_c)                 # nb max de variants chez un patient
+    ncol_pal <- maxc + 1               # une classe par entier (0..maxc)
 
-    if (nrow(mat_m) > 1) {
+    cat("Heatmap :", nrow(sel), "fusions P1/P2 ->", nrow(mat_c),
+        "paires de gènes (variants regroupés)\n")
+
+    if (nrow(mat_c) > 1) {
       pheatmap::pheatmap(
-        mat_m, color = colorRampPalette(c("#f7f7f7", "#111827"))(2),
-        annotation_row = ann, cluster_cols = TRUE, legend = FALSE,
-        fontsize_row = 7, fontsize_col = 7,
-        main = "Présence/absence — fusions chromo-spécifiques P1/P2 (séquences dédupliquées)",
+        mat_c,
+        color  = colorRampPalette(c("#f7f7f7", "#08306b"))(ncol_pal),
+        breaks = seq(-0.5, maxc + 0.5, by = 1),   # 0 = blanc, sa propre classe
+        display_numbers = disp, number_color = "grey20", fontsize_number = 6,
+        annotation_row = ann, cluster_rows = FALSE, cluster_cols = TRUE,
+        legend = TRUE, fontsize_row = 7, fontsize_col = 7,
+        main = "Fusions P1/P2 — nombre de variants détectés par patient",
         filename = fig_path("heatmap_fusions"), width = 10, height = 12)
     }
   }
